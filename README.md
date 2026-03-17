@@ -19,7 +19,7 @@ Built this to learn RAG properly.
 
 ## Run it locally
 ```bash
-git clone https://github.com/_ankush_09/askmybook.git
+git clone https://github.com/akwqugwqyd/askmybook.git
 npm install
 cp .env.example .env.local
 # fill in the keys
