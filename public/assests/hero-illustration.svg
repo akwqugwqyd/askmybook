@@ -1,0 +1,61 @@
+<svg viewBox="0 0 300 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Back book -->
+  <rect x="30" y="60" width="70" height="110" rx="3" fill="#2A1E10"/>
+  <rect x="30" y="60" width="10" height="110" rx="2" fill="#1E1408"/>
+  <rect x="46" y="85" width="42" height="3" rx="1" fill="#4A3420" opacity="0.7"/>
+  <rect x="46" y="95" width="34" height="3" rx="1" fill="#4A3420" opacity="0.7"/>
+  <rect x="46" y="105" width="38" height="3" rx="1" fill="#4A3420" opacity="0.7"/>
+
+  <!-- Middle book -->
+  <rect x="48" y="45" width="68" height="112" rx="3" fill="#1A2E1E"/>
+  <rect x="48" y="45" width="10" height="112" rx="2" fill="#102018"/>
+  <rect x="64" y="72" width="40" height="3" rx="1" fill="#2A5030" opacity="0.7"/>
+  <rect x="64" y="82" width="32" height="3" rx="1" fill="#2A5030" opacity="0.7"/>
+  <rect x="64" y="92" width="36" height="3" rx="1" fill="#2A5030" opacity="0.7"/>
+
+  <!-- Front book (open) -->
+  <path d="M68 50 Q110 42 110 155 L68 155 Z" fill="#F5ECD7"/>
+  <path d="M152 50 Q110 42 110 155 L152 155 Z" fill="#EDD9A3"/>
+  <path d="M68 50 Q110 42 152 50" fill="none" stroke="#C8A96E" stroke-width="1.5"/>
+  <line x1="74" y1="70" x2="106" y2="67" stroke="#C8A96E" stroke-width="0.8" opacity="0.5"/>
+  <line x1="74" y1="80" x2="106" y2="77" stroke="#C8A96E" stroke-width="0.8" opacity="0.5"/>
+  <line x1="74" y1="90" x2="106" y2="87" stroke="#C8A96E" stroke-width="0.8" opacity="0.5"/>
+  <line x1="74" y1="100" x2="106" y2="97" stroke="#C8A96E" stroke-width="0.8" opacity="0.5"/>
+  <line x1="114" y1="67" x2="146" y2="70" stroke="#C8A96E" stroke-width="0.8" opacity="0.5"/>
+  <line x1="114" y1="77" x2="146" y2="80" stroke="#C8A96E" stroke-width="0.8" opacity="0.5"/>
+  <line x1="114" y1="87" x2="146" y2="90" stroke="#C8A96E" stroke-width="0.8" opacity="0.5"/>
+  <line x1="114" y1="97" x2="146" y2="100" stroke="#C8A96E" stroke-width="0.8" opacity="0.5"/>
+
+  <!-- Globe -->
+  <circle cx="210" cy="85" r="48" fill="#1A1610" stroke="#4A3820" stroke-width="1"/>
+  <ellipse cx="210" cy="85" rx="22" ry="48" fill="none" stroke="#4A3820" stroke-width="0.8"/>
+  <ellipse cx="210" cy="85" rx="48" ry="16" fill="none" stroke="#4A3820" stroke-width="0.8"/>
+  <line x1="162" y1="85" x2="258" y2="85" stroke="#4A3820" stroke-width="0.8"/>
+  <line x1="210" y1="37" x2="210" y2="133" stroke="#4A3820" stroke-width="0.8"/>
+  <!-- Globe highlight -->
+  <ellipse cx="195" cy="68" rx="12" ry="8" fill="#E8C97A" opacity="0.06"/>
+  <!-- Globe stand -->
+  <rect x="206" y="132" width="8" height="16" rx="2" fill="#4A3820"/>
+  <ellipse cx="210" cy="150" rx="18" ry="5" fill="#3A2E14" opacity="0.6"/>
+
+  <!-- Lamp -->
+  <rect x="158" y="72" width="4" height="82" rx="2" fill="#4A3820"/>
+  <ellipse cx="160" cy="156" rx="14" ry="4" fill="#3A2E14" opacity="0.5"/>
+  <!-- Lamp shade -->
+  <path d="M138 72 L182 72 L174 46 L146 46 Z" fill="#2A2010"/>
+  <path d="M138 72 L182 72 L174 46 L146 46 Z" fill="none" stroke="#4A3820" stroke-width="1"/>
+  <!-- Lamp glow -->
+  <ellipse cx="160" cy="76" rx="24" ry="10" fill="#E8C97A" opacity="0.08"/>
+
+  <!-- Small side books -->
+  <rect x="240" y="118" width="14" height="40" rx="2" fill="#2A1A3A" opacity="0.9"/>
+  <rect x="256" y="112" width="12" height="46" rx="2" fill="#1A2A3A" opacity="0.9"/>
+  <rect x="270" y="122" width="13" height="36" rx="2" fill="#1A3A2A" opacity="0.9"/>
+
+  <!-- Stars/sparkles -->
+  <circle cx="245" cy="40" r="1.5" fill="#E8C97A" opacity="0.6"/>
+  <circle cx="260" cy="25" r="1" fill="#E8C97A" opacity="0.4"/>
+  <circle cx="230" cy="18" r="1.2" fill="#E8C97A" opacity="0.5"/>
+  <circle cx="50" cy="30" r="1" fill="#E8C97A" opacity="0.4"/>
+  <circle cx="25" cy="45" r="1.5" fill="#E8C97A" opacity="0.3"/>
+</svg>
