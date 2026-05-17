@@ -45,7 +45,7 @@ const BookGrid = () => {
                 <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
             </svg>
             <p className="text-sm text-[#D4C5A9]">No books yet</p>
-            <p className="text-xs text-[#5A5048]">Click "Add New" to upload your first book</p>
+            <p className="text-xs text-[#5A5048]">Click &quot;Add New&quot; to upload your first book</p>
         </div>
     )
 

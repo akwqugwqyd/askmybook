@@ -31,11 +31,13 @@ export async function POST(req: NextRequest) {
             try {
                 await processAndEmbedPDF(pdfUrl, book._id.toString())
             } catch (err) {
+                console.error("PDF Processing Error for book", book._id, ":", err)
             }
 
             return NextResponse.json({ success: true, book }, { status: 201 })
 
     } catch (error) {
+        console.error("Book creation error:", error)
         return NextResponse.json({ error: "Internal server error" }, { status: 500 })
     }
 }

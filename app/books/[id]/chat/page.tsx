@@ -9,6 +9,12 @@ interface Message {
     content: string
 }
 
+interface RequestStatus {
+    requestCount: number
+    remaining: number
+    limit: number
+}
+
 const ChatPage = () => {
     const { id } = useParams()
     const [book, setBook] = useState<IBook | null>(null)
@@ -16,6 +22,7 @@ const ChatPage = () => {
     const [input, setInput] = useState('')
     const [loading, setLoading] = useState(false)
     const [bookLoading, setBookLoading] = useState(true)
+    const [requestStatus, setRequestStatus] = useState<RequestStatus | null>(null)
     const bottomRef = useRef<HTMLDivElement>(null)
 
     useEffect(() => {
@@ -56,9 +63,15 @@ const ChatPage = () => {
                 body: JSON.stringify({ message: userMessage, bookId: id }),
             })
             const data = await res.json()
+
+            // Update request status
+            if (data.requestStatus) {
+                setRequestStatus(data.requestStatus)
+            }
+
             setMessages(prev => [...prev, {
                 role: 'assistant',
-                content: data.success ? data.reply : 'Sorry, something went wrong.'
+                content: data.success ? data.reply : (data.error || data.message || 'Sorry, something went wrong.')
             }])
         } catch {
             setMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, something went wrong.' }])
@@ -93,9 +106,18 @@ const ChatPage = () => {
                         <p className="text-xs text-[#5A5048]">by {book?.author}</p>
                     </div>
                 </div>
-                <div className="flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                    <span className="text-xs text-[#5A5048]">AI Ready</span>
+                <div className="flex items-center gap-4">
+                    {requestStatus && (
+                        <div className="text-xs text-[#7A6E62] flex items-center gap-2">
+                            <span>
+                                {requestStatus.remaining} / {requestStatus.limit} requests
+                            </span>
+                        </div>
+                    )}
+                    <div className="flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                        <span className="text-xs text-[#5A5048]">AI Ready</span>
+                    </div>
                 </div>
             </div>
 
