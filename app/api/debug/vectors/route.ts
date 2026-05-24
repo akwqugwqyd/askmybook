@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({
             success: true,
             bookId,
-            vectorCount: namespaceStats.vectorCount || 0,
+            vectorCount: namespaceStats.recordCount || 0,
             message: "Vectors found! PDF is ready for querying.",
         })
 
