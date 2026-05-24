@@ -2,7 +2,7 @@ import User from "@/database/models/user.model"
 import dbConnect from "@/database/mongoose"
 import { logger } from "@/lib/logger"
 
-const FREE_TIER_REQUESTS = 15
+const FREE_TIER_REQUESTS = 3
 const RESET_PERIOD_HOURS = 24
 
 export async function checkRequestLimit(userId: string) {
