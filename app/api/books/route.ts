@@ -28,11 +28,20 @@ export async function POST(req: NextRequest) {
                 pdfUrl,
                 userId,
             })
-            try {
-                await processAndEmbedPDF(pdfUrl, book._id.toString())
-            } catch (err) {
-                console.error("PDF Processing Error for book", book._id, ":", err)
-            }
+            
+            // Process PDF asynchronously but log errors
+            processAndEmbedPDF(pdfUrl, book._id.toString())
+                .then(() => {
+                    console.log(`✅ PDF Processing SUCCESS for book ${book._id}`)
+                })
+                .catch((err) => {
+                    console.error(`❌ PDF Processing FAILED for book ${book._id}:`, err)
+                    console.error("Error details:", {
+                        message: err?.message,
+                        code: err?.code,
+                        stack: err?.stack
+                    })
+                })
 
             return NextResponse.json({ success: true, book }, { status: 201 })
 

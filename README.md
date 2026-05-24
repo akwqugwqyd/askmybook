@@ -13,7 +13,7 @@ Upload a PDF, ask it anything using AI-powered semantic search and RAG (Retrieva
 - 📚 **Book Management** - Create, view, and delete your uploaded books
 - 🎨 **Modern UI** - Responsive dark-themed interface with Tailwind CSS
 - 🔒 **Security** - User-level data isolation via Pinecone namespaces
-- ⏱️ **Rate Limiting** - 3 free requests per user per 24 hours (rolling window)
+- ⏱️ **Rate Limiting** - 10 free requests per user per 24 hours (rolling window)
 
 ---
 
@@ -131,7 +131,7 @@ utils.ts                  # Helper utilities
       • Return answer + increment requestCount
    
    ❌ If limit exceeded:
-      • Return HTTP 429 "3 requests per 24 hours"
+      • Return HTTP 429 "10 requests per 24 hours"
 
 5. Wait 24 Hours
    ↓
@@ -194,8 +194,8 @@ npm run dev
 Visit `http://localhost:3000` and test:
 - Sign up with Clerk
 - Upload a PDF
-- Ask 3 questions (verify rate limiting works)
-- Try 4th question (should get 429 error)
+- Ask 10 questions (verify rate limiting works)
+- Try 11th question (should get 429 error)
 
 ---
 
@@ -225,10 +225,10 @@ npm run dev
 # 1. Open http://localhost:3000
 # 2. Upload a PDF
 # 3. Go to book → chat
-# 4. Ask 3 questions
-#    - Verify counter shows "3/3" → "2/3" → "1/3" → "0/3"
-# 5. Try 4th question
-#    - Should get 429 error: "3 requests per 24 hours. Please try again tomorrow."
+# 4. Ask 10 questions
+#    - Verify counter shows "10/10" → "9/10" → ... → "0/10"
+# 5. Try 11th question
+#    - Should get 429 error: "10 requests per 24 hours. Please try again tomorrow."
 ```
 
 ### **API Testing**
