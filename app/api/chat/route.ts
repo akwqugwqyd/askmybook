@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
             logger.warn(`Request limit exceeded for user ${userId}`)
             return NextResponse.json({
                 success: false,
-                error: "Free tier limit reached (3 requests per 24 hours)",
+                error: "Free tier limit reached (10 requests per 24 hours)",
                 message: `You've used all ${limitCheck.limit} free requests today. Please try again tomorrow.`,
                 requestStatus: status,
             }, { status: 429 })
@@ -33,43 +33,89 @@ export async function POST(req: NextRequest) {
             model: "text-embedding-3-small",
         })
 
-        const pineconeIndex = pineconeClient.index(process.env.PINECONE_INDEX!)
-
-        const vectorStore = await PineconeStore.fromExistingIndex(embeddings, {
-            pineconeIndex,
-            namespace: bookId,
-        })
-
-        const relevantDocs = await vectorStore.similaritySearch(message, 4)
+        logger.info(`[CHAT] 1️⃣ Embedding user message...`)
         
-        if (relevantDocs.length === 0) {
-            return NextResponse.json({
-                success: true,
-                reply: "I couldn't find relevant information in the book to answer your question. Please try rephrasing or ask something else.",
-                requestStatus: status,
-            }, { status: 200 })
+        const indexName = process.env.PINECONE_INDEX!
+        logger.info(`[CHAT] 2️⃣ Getting Pinecone index: ${indexName}`)
+        
+        const pineconeIndex = pineconeClient.index(indexName)
+        logger.info(`[CHAT] 3️⃣ Index retrieved successfully`)
+
+        logger.info(`[CHAT] 4️⃣ Creating PineconeStore for namespace: ${bookId}`)
+        
+        let vectorStore
+        try {
+            vectorStore = await PineconeStore.fromExistingIndex(embeddings, {
+                pineconeIndex,
+                namespace: bookId,
+            })
+            logger.info(`[CHAT] ✅ PineconeStore created successfully`)
+        } catch (storeError) {
+            logger.error(`[CHAT] ❌ Failed to create PineconeStore:`, storeError)
+            throw storeError
         }
 
-        const context = relevantDocs.map(doc => doc.pageContent).join("\n\n")
-
+        logger.info(`[CHAT] 5️⃣ Embedding question: "${message.substring(0, 100)}"`)
+        
+        let relevantDocs
+        try {
+            relevantDocs = await vectorStore.similaritySearch(message, 8)
+            logger.info(`[CHAT] ✅ Similarity search completed`)
+        } catch (searchError) {
+            logger.error(`[CHAT] ❌ Similarity search failed:`, searchError)
+            throw searchError
+        }
+        
+        logger.info(`[CHAT] 6️⃣ Found ${relevantDocs.length} relevant documents`)
+        
+        if (relevantDocs.length === 0) {
+            logger.warn(`[CHAT] ⚠️ NO DOCUMENTS FOUND - This likely means PDF was never embedded`)
+            logger.warn(`[CHAT] Check: 1) Did PDF upload succeed? 2) Check /api/debug/vectors?bookId=${bookId}`)
+        } else {
+            logger.info(`[CHAT] ✅ Found chunks with content lengths: ${relevantDocs.map(d => d.pageContent.length).join(", ")}`)
+        }
+        
         const llm = new ChatOpenAI({
             openAIApiKey: process.env.OPENAI_API_KEY,
             modelName: "gpt-3.5-turbo",
             temperature: 0.7,
         })
 
+        let systemPrompt: string
+        let userMessage: string
+
+        if (relevantDocs.length > 0) {
+            // Answer based on PDF content - PRODUCTION GRADE
+            const context = relevantDocs.map(doc => doc.pageContent).join("\n\n")
+            systemPrompt = `You are an expert AI assistant analyzing a document. Your task is to answer questions based ONLY on the provided document content.
+
+IMPORTANT INSTRUCTIONS:
+1. Answer directly and confidently using ONLY the provided document content
+2. Extract specific details, names, dates, numbers, skills from the document
+3. Do NOT apologize or say you don't have access - you have the document content
+4. Provide detailed, factual answers based on what's in the document
+5. If information is not in the document, explicitly say "This information is not mentioned in the document"
+6. Always cite relevant sections when answering
+
+DOCUMENT CONTENT:
+${context}
+
+Remember: You have complete access to the document content above. Answer with confidence and specificity.`
+            userMessage = message
+        } else {
+            // Answer as general knowledge question
+            systemPrompt = `You are a helpful AI assistant. Answer the user's question using your general knowledge. Be concise and accurate.`
+            userMessage = message
+        }
+
         const response = await llm.invoke([
             {
                 role: "system",
-                content: `You are an AI assistant that answers questions based on the following book content.
-Only answer based on the provided context. If the answer isn't in the context, say so.
-
-Context:
-${context}`
+                content: systemPrompt
             },
             {
                 role: "user",
-                content: message,
+                content: userMessage,
             }
         ])
 
