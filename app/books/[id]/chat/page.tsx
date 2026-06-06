@@ -91,7 +91,7 @@ const ChatPage = () => {
     )
 
     return (
-        <main className="h-screen bg-[#0D0C0A] flex flex-col">
+        <main className="h-screen bg-[#0D0C0A] flex flex-col overflow-hidden">
 
             {/* Header */}
             <div className="w-full bg-[#0D0C0A] border-b border-[#2A2520] px-6 py-4
@@ -122,7 +122,7 @@ const ChatPage = () => {
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto px-4 py-6 flex flex-col gap-4
+            <div className="flex-1 min-h-0 overflow-y-auto px-4 py-6 flex flex-col gap-4
                 max-w-3xl w-full mx-auto">
                 {messages.map((msg, i) => (
                     <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>

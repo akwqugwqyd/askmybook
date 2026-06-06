@@ -1,14 +1,23 @@
 "use client"
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { useUser } from '@clerk/nextjs'
 
 const BookNewPage = () => {
     const router = useRouter()
+    const { user, isLoaded } = useUser()
     const [pdfFile, setPdfFile] = useState<File | null>(null)
     const [coverImage, setCoverImage] = useState<File | null>(null)
     const [title, setTitle] = useState('')
     const [author, setAuthor] = useState('')
     const [loading, setLoading] = useState(false)
+
+    // Check authentication and redirect if not logged in
+    useEffect(() => {
+        if (isLoaded && !user) {
+            router.push('/sign-in')
+        }
+    }, [isLoaded, user, router])
 
     const handlePdfChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files?.[0]) setPdfFile(e.target.files[0])
@@ -52,6 +61,17 @@ const BookNewPage = () => {
 
     return (
         <main className="min-h-screen bg-[#0D0C0A] px-6 py-14 flex flex-col items-center">
+            {/* Show loading state while checking authentication */}
+            {!isLoaded ? (
+                <div className="flex flex-col items-center justify-center min-h-[60vh]">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#E8C97A]"></div>
+                    <p className="text-[#7A6E62] mt-4">Loading...</p>
+                </div>
+            ) : !user ? (
+                <div className="flex flex-col items-center justify-center min-h-[60vh]">
+                    <p className="text-[#F0E6D0]">Redirecting to login...</p>
+                </div>
+            ) : (
             <div className="w-full max-w-xl">
 
                 <div className="text-center mb-10">
@@ -164,6 +184,7 @@ const BookNewPage = () => {
                     </div>
                 </div>
             </div>
+            )}
         </main>
     )
 }

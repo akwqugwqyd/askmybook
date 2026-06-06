@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Mona_Sans, IBM_Plex_Serif } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 
+// @ts-ignore - CSS import for global styles
 import "./globals.css";
 import Navbar from "@/components/Navbar";
 
@@ -31,9 +32,7 @@ export default function RootLayout({
   return (
     <ClerkProvider>
       <html lang="en">
-        <body
-          className={`${ibmPlexSerif.variable} ${monaSans.variable} antialiased`}
-        >
+        <body className={`${ibmPlexSerif.variable} ${monaSans.variable} antialiased flex flex-col h-full`}>
           <Navbar />
           {children}
         </body>
