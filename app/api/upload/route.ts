@@ -1,55 +1,58 @@
+import { randomUUID } from "node:crypto"
 import { NextRequest, NextResponse } from "next/server"
 import { auth } from "@clerk/nextjs/server"
 import cloudinary from "@/lib/cloudinary"
+import { logger } from "@/lib/logger"
+import { uploadIntentSchema } from "@/lib/validation"
+
+export const runtime = "nodejs"
+export const maxDuration = 15
 
 export async function POST(req: NextRequest) {
     try {
         const { userId } = await auth()
         if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-        const formData = await req.formData()
-        const file = formData.get("file") as File
+        const parsed = uploadIntentSchema.safeParse(await req.json())
+        if (!parsed.success) {
+            return NextResponse.json({
+                error: parsed.error.issues[0]?.message || "Invalid PDF upload request.",
+            }, { status: 400 })
+        }
 
-        if (!file) return NextResponse.json({ error: "No file provided" }, { status: 400 })
+        const cloudName = process.env.CLOUDINARY_CLOUD_NAME
+        const apiKey = process.env.CLOUDINARY_API_KEY
+        const apiSecret = process.env.CLOUDINARY_API_SECRET
+        if (!cloudName || !apiKey || !apiSecret) {
+            throw new Error("Cloudinary is not configured.")
+        }
 
-        console.log(`📤 Uploading file: ${file.name} (${file.size} bytes)`)
+        const timestamp = Math.floor(Date.now() / 1000)
+        const folder = `ai-book/${userId}`
+        const generatedId = `${randomUUID()}.pdf`
+        const signedParameters = {
+            allowed_formats: "pdf",
+            folder,
+            public_id: generatedId,
+            timestamp,
+            type: "authenticated",
+        }
+        const signature = cloudinary.utils.api_sign_request(signedParameters, apiSecret)
 
-        const bytes = await file.arrayBuffer()
-        const buffer = Buffer.from(bytes)
-
-        const result = await new Promise((resolve, reject) => {
-            cloudinary.uploader.upload_stream(
-                {
-                    resource_type: "raw",
-                    folder: `ai-book/${userId}`,
-                    type: "authenticated",
-                    delivery_type: "upload",
-                },
-                (error, result) => {
-                    if (error) {
-                        console.error(`❌ Cloudinary upload failed:`, error)
-                        reject(error)
-                    } else {
-                        console.log(`✅ Cloudinary upload successful`)
-                        console.log(`📁 Public ID: ${(result as any).public_id}`)
-                        console.log(`🔗 Secure URL: ${(result as any).secure_url}`)
-                        console.log(`📊 Resource Type: ${(result as any).resource_type}`)
-                        console.log(`🔐 Upload Type: ${(result as any).type} (authenticated = private/secure)`)
-                        resolve(result)
-                    }
-                }
-            ).end(buffer)
+        return NextResponse.json({
+            success: true,
+            uploadUrl: `https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudName)}/raw/upload`,
+            publicId: `${folder}/${generatedId}`,
+            fields: {
+                ...signedParameters,
+                api_key: apiKey,
+                signature,
+            },
         })
-
-        const secureUrl = (result as any).secure_url
-        console.log(`📥 Returning URL: ${secureUrl}`)
-        
-        return NextResponse.json({ success: true, url: secureUrl }, { status: 200 })
-
     } catch (error) {
-        console.error("Upload Error:", error)
-        const errorMessage = error instanceof Error ? error.message : "Upload failed"
-        return NextResponse.json({ error: errorMessage }, { status: 500 })
+        logger.error("Cloudinary upload signature failed:", error)
+        return NextResponse.json({
+            error: "We could not authorize that upload. Please retry.",
+        }, { status: 500 })
     }
 }
-

@@ -5,8 +5,9 @@ import { cn } from '@/lib/utils'
 import { SignInButton, UserButton, useUser } from '@clerk/nextjs'
 
 const navitems = [
-    { label: 'Library', href: '/' },
-    { label: 'Add New', href: '/books/new' },
+    { label: 'Knowledge base', href: '/dashboard' },
+    { label: 'Ask documents', href: '/chat' },
+    { label: 'Upload', href: '/books/new' },
 ]
 
 const Navbar = () => {

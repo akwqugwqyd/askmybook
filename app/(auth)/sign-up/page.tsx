@@ -11,7 +11,7 @@ export default function SignUpPage() {
             Join AskMyBook
           </h1>
           <p className="text-sm text-[#7A6E62]">
-            Create an account to start uploading your books
+            Create an account to build your private knowledge base
           </p>
         </div>
         
