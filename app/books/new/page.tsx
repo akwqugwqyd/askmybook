@@ -1,192 +1,279 @@
 "use client"
-import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
-import { useUser } from '@clerk/nextjs'
 
-const BookNewPage = () => {
-    const router = useRouter()
-    const { user, isLoaded } = useUser()
-    const [pdfFile, setPdfFile] = useState<File | null>(null)
-    const [coverImage, setCoverImage] = useState<File | null>(null)
-    const [title, setTitle] = useState('')
-    const [author, setAuthor] = useState('')
-    const [loading, setLoading] = useState(false)
+import Link from "next/link"
+import { useMemo, useState } from "react"
+import { AlertCircle, CheckCircle2, FileText, LoaderCircle, UploadCloud, X } from "lucide-react"
 
-    // Check authentication and redirect if not logged in
-    useEffect(() => {
-        if (isLoaded && !user) {
-            router.push('/sign-in')
+type UploadState = "pending" | "uploading" | "processing" | "ready" | "failed"
+interface UploadItem {
+    id: string
+    file: File
+    title: string
+    state: UploadState
+    documentId?: string
+    error?: string
+}
+
+interface UploadIntent {
+    uploadUrl: string
+    publicId: string
+    fields: Record<string, string | number>
+    error?: string
+}
+
+const titleFromFile = (name: string) =>
+    name.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim()
+
+const hasPdfSignature = async (file: File): Promise<boolean> => {
+    const bytes = new Uint8Array(await file.slice(0, 5).arrayBuffer())
+    return new TextDecoder("ascii").decode(bytes) === "%PDF-"
+}
+
+export default function NewDocumentsPage() {
+    const [items, setItems] = useState<UploadItem[]>([])
+    const [author, setAuthor] = useState("")
+    const [running, setRunning] = useState(false)
+    const [pageError, setPageError] = useState("")
+    const completed = useMemo(() => items.filter((item) => item.state === "ready").length, [items])
+
+    const addFiles = (files: FileList | File[]) => {
+        setPageError("")
+        const incoming = Array.from(files)
+        const invalid = incoming.find((file) =>
+            !(file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"))
+            || file.size > 50 * 1024 * 1024,
+        )
+        if (invalid) {
+            setPageError("Every file must be a PDF no larger than 50MB.")
+            return
         }
-    }, [isLoaded, user, router])
-
-    const handlePdfChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files?.[0]) setPdfFile(e.target.files[0])
+        setItems((current) => [
+            ...current,
+            ...incoming.map((file) => ({
+                id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
+                file,
+                title: titleFromFile(file.name) || "Untitled document",
+                state: "pending" as const,
+            })),
+        ])
     }
 
-    const handleCoverChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files?.[0]) setCoverImage(e.target.files[0])
+    const update = (id: string, patch: Partial<UploadItem>) => {
+        setItems((current) => current.map((item) => item.id === id ? { ...item, ...patch } : item))
     }
 
-    const uploadFile = async (file: File): Promise<string> => {
-        const formData = new FormData()
-        formData.append("file", file)
-        const res = await fetch("/api/upload", { method: "POST", body: formData })
-        const data = await res.json()
-        if (!data.success) throw new Error(data.error)
-        return data.url
-    }
-
-    const handleSubmit = async () => {
-        if (!title || !author) return alert("Title and author are required")
-        if (!pdfFile) return alert("Please upload a PDF file")
-        setLoading(true)
+    const processItem = async (item: UploadItem) => {
         try {
-            const pdfUrl = await uploadFile(pdfFile)
-            let coverImageUrl = null
-            if (coverImage) coverImageUrl = await uploadFile(coverImage)
-            const res = await fetch("/api/books", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ title, author, pdfUrl, coverImage: coverImageUrl }),
+            let documentId = item.documentId
+            if (!documentId) {
+                update(item.id, { state: "uploading", error: undefined })
+                if (!await hasPdfSignature(item.file)) {
+                    throw new Error("The file contents do not match a valid PDF.")
+                }
+
+                const intentResponse = await fetch("/api/upload", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        fileName: item.file.name,
+                        fileSize: item.file.size,
+                        contentType: item.file.type || "application/pdf",
+                    }),
+                })
+                const intent = await intentResponse.json() as UploadIntent
+                if (!intentResponse.ok) {
+                    throw new Error(intent.error || "Upload could not be authorized.")
+                }
+
+                const formData = new FormData()
+                Object.entries(intent.fields).forEach(([key, value]) => {
+                    formData.append(key, String(value))
+                })
+                formData.append("file", item.file)
+                const uploadResponse = await fetch(intent.uploadUrl, {
+                    method: "POST",
+                    body: formData,
+                })
+                const upload = await uploadResponse.json()
+                if (!uploadResponse.ok) {
+                    throw new Error(upload.error?.message || "Cloudinary upload failed.")
+                }
+                if (
+                    upload.public_id !== intent.publicId
+                    || upload.resource_type !== "raw"
+                    || upload.type !== "authenticated"
+                ) {
+                    throw new Error("Cloudinary returned an invalid upload reference.")
+                }
+
+                const createResponse = await fetch("/api/books", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        title: item.title.trim(),
+                        author: author.trim() || "Unknown author",
+                        pdfUrl: upload.secure_url,
+                        storagePublicId: upload.public_id,
+                        documentName: item.file.name,
+                        fileSize: item.file.size,
+                    }),
+                })
+                const created = await createResponse.json()
+                if (!createResponse.ok) throw new Error(created.error || "Document record could not be created.")
+                documentId = created.book._id
+                update(item.id, { documentId })
+            }
+
+            update(item.id, { state: "processing" })
+            const processResponse = await fetch(`/api/books/${documentId}/process`, { method: "POST" })
+            const processed = await processResponse.json()
+            if (!processResponse.ok) throw new Error(processed.error || "Document processing failed.")
+            if (processed.book?.processingStatus === "failed") {
+                throw new Error(processed.book.processingError?.message || "Document processing failed.")
+            }
+            update(item.id, {
+                state: processed.book?.processingStatus === "ready" ? "ready" : "processing",
             })
-            const data = await res.json()
-            if (data.success) router.push("/")
-            else alert(data.error)
         } catch (error) {
-            alert("Something went wrong")
-        } finally {
-            setLoading(false)
+            update(item.id, {
+                state: "failed",
+                error: error instanceof Error ? error.message : "This document could not be processed.",
+            })
         }
+    }
+
+    const start = async () => {
+        const pending = items.filter((item) => item.state === "pending" || item.state === "failed")
+        if (!pending.length) return
+        if (pending.some((item) => !item.title.trim())) {
+            setPageError("Every document needs a title.")
+            return
+        }
+        setRunning(true)
+        setPageError("")
+
+        // A small worker pool keeps memory and third-party API pressure bounded.
+        const queue = [...pending]
+        const workers = Array.from({ length: Math.min(2, queue.length) }, async () => {
+            while (queue.length) {
+                const item = queue.shift()
+                if (item) await processItem(item)
+            }
+        })
+        await Promise.all(workers)
+        setRunning(false)
     }
 
     return (
-        <main className="min-h-screen bg-[#0D0C0A] px-6 py-14 flex flex-col items-center">
-            {/* Show loading state while checking authentication */}
-            {!isLoaded ? (
-                <div className="flex flex-col items-center justify-center min-h-[60vh]">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#E8C97A]"></div>
-                    <p className="text-[#7A6E62] mt-4">Loading...</p>
-                </div>
-            ) : !user ? (
-                <div className="flex flex-col items-center justify-center min-h-[60vh]">
-                    <p className="text-[#F0E6D0]">Redirecting to login...</p>
-                </div>
-            ) : (
-            <div className="w-full max-w-xl">
-
-                <div className="text-center mb-10">
-                    <h1 className="text-3xl font-medium text-[#F0E6D0] mb-2">
-                        Add a New Book
-                    </h1>
-                    <p className="text-sm text-[#5A5048]">
-                        Upload a PDF to generate your interactive interview
+        <main className="min-h-screen bg-[#0d0c0a] px-4 py-10 sm:px-7">
+            <div className="mx-auto max-w-3xl">
+                <Link href="/dashboard" className="text-xs text-[#82766a] hover:text-[#e8c97a]">← Knowledge base</Link>
+                <header className="mt-6">
+                    <p className="text-[11px] uppercase tracking-[0.2em] text-[#806f53]">Document ingestion</p>
+                    <h1 className="mt-2 font-[var(--font-ibm-plex-serif)] text-3xl text-[#f0e6d0]">Add to your knowledge base</h1>
+                    <p className="mt-2 text-sm leading-6 text-[#7d7267]">
+                        Upload several PDFs at once. Each file is extracted, chunked, and indexed independently.
                     </p>
-                </div>
+                </header>
 
-                <div className="flex flex-col gap-6">
-
-                    {/* PDF Upload */}
-                    <div className="flex flex-col gap-2">
-                        <label className="text-xs text-[#7A6E62] uppercase tracking-wider">
-                            Book PDF File
-                        </label>
-                        <label className="w-full bg-[#141210] border border-dashed border-[#2A2520]
-                            rounded-xl flex flex-col items-center justify-center py-10 gap-3
-                            cursor-pointer hover:border-[#E8C97A] transition-colors duration-200">
-                            <input type="file" accept=".pdf" className="hidden" onChange={handlePdfChange} />
-                            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"
-                                viewBox="0 0 24 24" fill="none" stroke="#E8C97A"
-                                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                <polyline points="17 8 12 3 7 8" />
-                                <line x1="12" y1="3" x2="12" y2="15" />
-                            </svg>
-                            <div className="text-center">
-                                <p className="text-sm text-[#D4C5A9]">
-                                    {pdfFile ? pdfFile.name : 'Click to upload PDF'}
-                                </p>
-                                <p className="text-xs text-[#5A5048] mt-1">PDF file (max 50MB)</p>
-                            </div>
-                        </label>
+                {pageError && (
+                    <div className="mt-6 flex gap-2 rounded-xl border border-[#55302d] bg-[#241513] px-4 py-3 text-sm text-[#d58c84]">
+                        <AlertCircle size={17} className="mt-0.5 shrink-0" /> {pageError}
                     </div>
+                )}
 
-                    {/* Cover Image */}
-                    <div className="flex flex-col gap-2">
-                        <label className="text-xs text-[#7A6E62] uppercase tracking-wider">
-                            Cover Image <span className="normal-case text-[#3A3028]">(Optional)</span>
-                        </label>
-                        <label className="w-full bg-[#141210] border border-dashed border-[#2A2520]
-                            rounded-xl flex flex-col items-center justify-center py-10 gap-3
-                            cursor-pointer hover:border-[#E8C97A] transition-colors duration-200">
-                            <input type="file" accept="image/*" className="hidden" onChange={handleCoverChange} />
-                            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"
-                                viewBox="0 0 24 24" fill="none" stroke="#E8C97A"
-                                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                                <circle cx="8.5" cy="8.5" r="1.5" />
-                                <polyline points="21 15 16 10 5 21" />
-                            </svg>
-                            <div className="text-center">
-                                <p className="text-sm text-[#D4C5A9]">
-                                    {coverImage ? coverImage.name : 'Click to upload cover image'}
-                                </p>
-                                <p className="text-xs text-[#5A5048] mt-1">Leave empty to use default</p>
-                            </div>
-                        </label>
-                    </div>
+                <label
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => {
+                        event.preventDefault()
+                        addFiles(event.dataTransfer.files)
+                    }}
+                    className="mt-7 flex cursor-pointer flex-col items-center rounded-2xl border border-dashed border-[#453b30] bg-[#141210] px-6 py-12 text-center hover:border-[#806b42]">
+                    <input
+                        type="file"
+                        accept=".pdf,application/pdf"
+                        multiple
+                        disabled={running}
+                        className="hidden"
+                        onChange={(event) => event.target.files && addFiles(event.target.files)}
+                    />
+                    <span className="grid h-12 w-12 place-items-center rounded-2xl bg-[#211c14] text-[#e8c97a]"><UploadCloud size={22} /></span>
+                    <p className="mt-4 text-sm font-medium text-[#dfd2bd]">Drop PDFs here, or browse</p>
+                    <p className="mt-1 text-xs text-[#6f665d]">Multiple files · up to 50MB each</p>
+                </label>
 
-                    {/* Title */}
-                    <div className="flex flex-col gap-2">
-                        <label className="text-xs text-[#7A6E62] uppercase tracking-wider">Title</label>
-                        <input
-                            type="text"
-                            placeholder="ex: Rich Dad Poor Dad"
-                            value={title}
-                            onChange={(e) => setTitle(e.target.value)}
-                            className="w-full bg-[#141210] border border-[#2A2520] rounded-lg
-                                px-4 py-3 text-sm text-[#D4C5A9] placeholder-[#3A3028]
-                                focus:outline-none focus:border-[#E8C97A] transition-colors duration-200"
-                        />
-                    </div>
+                {items.length > 0 && (
+                    <section className="mt-6 overflow-hidden rounded-2xl border border-[#2c2721] bg-[#12100e]">
+                        <div className="border-b border-[#2c2721] px-5 py-4">
+                            <label className="text-[11px] uppercase tracking-[0.16em] text-[#756a60]">Author (optional, applies to all)</label>
+                            <input
+                                value={author}
+                                onChange={(event) => setAuthor(event.target.value)}
+                                disabled={running}
+                                placeholder="Author or organization"
+                                maxLength={160}
+                                className="mt-2 w-full rounded-lg border border-[#393128] bg-[#171410] px-3 py-2.5 text-sm text-[#e4d7c2] outline-none focus:border-[#806b42]"
+                            />
+                        </div>
+                        <div className="divide-y divide-[#27221d]">
+                            {items.map((item) => (
+                                <div key={item.id} className="grid gap-3 px-4 py-4 sm:grid-cols-[28px_1fr_auto] sm:items-center">
+                                    <FileText size={18} className="text-[#8d806f]" />
+                                    <div className="min-w-0">
+                                        <input
+                                            value={item.title}
+                                            disabled={running || item.state === "ready"}
+                                            maxLength={200}
+                                            onChange={(event) => update(item.id, { title: event.target.value })}
+                                            className="w-full truncate bg-transparent text-sm text-[#dfd2bd] outline-none disabled:opacity-80"
+                                        />
+                                        <p className="mt-1 text-[11px] text-[#655c53]">
+                                            {item.file.name} · {(item.file.size / 1024 / 1024).toFixed(1)}MB
+                                        </p>
+                                        {item.error && <p className="mt-1 text-xs text-[#c87c74]">{item.error}</p>}
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        {(item.state === "uploading" || item.state === "processing") && (
+                                            <span className="flex items-center gap-2 text-xs text-[#c7a967]">
+                                                <LoaderCircle size={14} className="animate-spin" />
+                                                {item.state === "uploading" ? "Uploading" : "Indexing"}
+                                            </span>
+                                        )}
+                                        {item.state === "ready" && <CheckCircle2 size={17} className="text-[#88a978]" />}
+                                        {item.state === "failed" && <AlertCircle size={17} className="text-[#c87c74]" />}
+                                        {item.state === "pending" && !running && (
+                                            <button onClick={() => setItems((current) => current.filter((value) => value.id !== item.id))} aria-label="Remove file" className="p-1 text-[#776b60]">
+                                                <X size={16} />
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
+                )}
 
-                    {/* Author */}
-                    <div className="flex flex-col gap-2">
-                        <label className="text-xs text-[#7A6E62] uppercase tracking-wider">Author Name</label>
-                        <input
-                            type="text"
-                            placeholder="ex: Robert Kiyosaki"
-                            value={author}
-                            onChange={(e) => setAuthor(e.target.value)}
-                            className="w-full bg-[#141210] border border-[#2A2520] rounded-lg
-                                px-4 py-3 text-sm text-[#D4C5A9] placeholder-[#3A3028]
-                                focus:outline-none focus:border-[#E8C97A] transition-colors duration-200"
-                        />
-                    </div>
-
-                    {/* Buttons */}
-                    <div className="flex gap-3 pt-2">
+                <div className="mt-6 flex items-center justify-between gap-4">
+                    <p className="text-xs text-[#71675d]">
+                        {running
+                            ? "Keep this page open while files are indexed."
+                            : completed
+                                ? `${completed} document${completed === 1 ? "" : "s"} ready.`
+                                : "Files are account-isolated and processed by your configured AI providers."}
+                    </p>
+                    <div className="flex gap-2">
+                        {completed > 0 && !running && (
+                            <Link href="/dashboard" className="rounded-xl border border-[#3a332b] px-4 py-2.5 text-sm text-[#cfc2ad]">View library</Link>
+                        )}
                         <button
-                            onClick={() => router.back()}
-                            disabled={loading}
-                            className="flex-1 py-3 rounded-lg border border-[#2A2520] text-sm
-                                text-[#7A6E62] hover:border-[#3A3028] hover:text-[#D4C5A9]
-                                transition-colors duration-200 disabled:opacity-50">
-                            Cancel
-                        </button>
-                        <button
-                            onClick={handleSubmit}
-                            disabled={loading}
-                            className="flex-1 py-3 rounded-lg bg-[#E8C97A] text-sm font-medium
-                                text-[#0D0C0A] hover:bg-[#D4B560] transition-colors duration-200
-                                disabled:opacity-50">
-                            {loading ? 'Uploading...' : 'Add Book'}
+                            onClick={() => void start()}
+                            disabled={running || !items.some((item) => item.state === "pending" || item.state === "failed")}
+                            className="rounded-xl bg-[#e8c97a] px-5 py-2.5 text-sm font-semibold text-[#17130e] disabled:opacity-35">
+                            {running ? "Processing…" : `Process ${items.filter((item) => item.state === "pending" || item.state === "failed").length || ""} document${items.filter((item) => item.state === "pending" || item.state === "failed").length === 1 ? "" : "s"}`}
                         </button>
                     </div>
                 </div>
             </div>
-            )}
         </main>
     )
 }
-
-export default BookNewPage

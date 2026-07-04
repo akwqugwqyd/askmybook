@@ -1,8 +1,20 @@
 import { NextRequest, NextResponse } from "next/server"
 import { auth } from "@clerk/nextjs/server"
 import dbConnect from "@/database/mongoose"
-import Book from "@/database/models/book.model"
-import { processAndEmbedPDF } from "@/lib/langchain"
+import Book, { type IBook } from "@/database/models/book.model"
+import { serializeDocumentSummary } from "@/lib/document-view"
+import { createDocumentSchema } from "@/lib/validation"
+
+const isOwnedCloudinaryUpload = (urlValue: string, publicId: string, userId: string): boolean => {
+    try {
+        const url = new URL(urlValue)
+        return url.protocol === "https:"
+            && url.hostname === "res.cloudinary.com"
+            && publicId.startsWith(`ai-book/${userId}/`)
+    } catch {
+        return false
+    }
+}
 
 export async function POST(req: NextRequest) {
     try {
@@ -11,61 +23,49 @@ export async function POST(req: NextRequest) {
 
         await dbConnect()
 
-        const { title, author, coverImage, pdfUrl } = await req.json()
-
-        if (!title || !author || !pdfUrl) {
-            return NextResponse.json(
-                { error: "Title, author and PDF are required" },
-                { status: 400 }
-            )
+        const parsed = createDocumentSchema.safeParse(await req.json())
+        if (!parsed.success) {
+            return NextResponse.json({ error: "Invalid document metadata." }, { status: 400 })
+        }
+        const { title, author, pdfUrl, documentName, fileSize, storagePublicId } = parsed.data
+        if (!isOwnedCloudinaryUpload(pdfUrl, storagePublicId, userId)) {
+            return NextResponse.json({ error: "The PDF upload reference is invalid." }, { status: 400 })
         }
 
-        // Save book to MongoDB
-            const book = await Book.create({
-                title,
-                author,
-                coverImage: coverImage || null,
-                pdfUrl,
-                userId,
-            })
-            
-            // Process PDF asynchronously but log errors
-            processAndEmbedPDF(pdfUrl, book._id.toString())
-                .then(() => {
-                    console.log(`✅ PDF Processing SUCCESS for book ${book._id}`)
-                })
-                .catch((err) => {
-                    console.error(`❌ PDF Processing FAILED for book ${book._id}:`, err)
-                    console.error("Error details:", {
-                        message: err?.message,
-                        code: err?.code,
-                        stack: err?.stack
-                    })
-                })
+        const book = await Book.create({
+            title,
+            author,
+            pdfUrl,
+            userId,
+            documentName,
+            fileSize,
+            storagePublicId: storagePublicId || undefined,
+            processingStatus: "queued",
+        }) as IBook
 
-            return NextResponse.json({ success: true, book }, { status: 201 })
-
+        return NextResponse.json({ success: true, book }, { status: 201 })
     } catch (error) {
-        console.error("Book creation error:", error)
-        return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+        console.error("Document creation error:", error)
+        return NextResponse.json({
+            error: "We could not create this document. Please check the upload and try again.",
+        }, { status: 500 })
     }
 }
 
-export async function GET(req: NextRequest) {
+export async function GET() {
     try {
         const { userId } = await auth()
         if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
         await dbConnect()
 
-        const books = await Book.find({ userId }).sort({ createdAt: -1 })
+        const books = await Book.find({ userId }).sort({ createdAt: -1 }).lean()
+        const compatibleBooks = books.map(serializeDocumentSummary)
 
-        return NextResponse.json({ success: true, books }, { status: 200 })
-
-    } catch (error) {
-        return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+        return NextResponse.json({ success: true, books: compatibleBooks }, { status: 200 })
+    } catch {
+        return NextResponse.json({
+            error: "We could not load your documents right now. Please refresh and try again.",
+        }, { status: 500 })
     }
 }
-
-
-

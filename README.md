@@ -1,628 +1,226 @@
-# 📚 AI Book SaaS - AI-Powered PDF Chat Application
+# AskMyBook
 
-Upload a PDF, ask it anything using AI-powered semantic search and RAG (Retrieval-Augmented Generation).
+A production-oriented, private document Q&A application built with Next.js. Users upload multiple PDFs, choose one document, a selected set, or their entire knowledge base, and receive answers grounded only in retrieved passages with page-level citations.
 
----
+## Product behavior
 
-## 📋 Features
+- Multi-file PDF upload with independent processing and retry states
+- Single-document, selected-document, and full-knowledge-base queries
+- Clerk authentication and ownership checks at every database/API boundary
+- User-isolated Pinecone namespaces plus document metadata filters
+- Page-aware text extraction and recursive, overlapping chunks
+- Agentic retrieval with query decomposition, relevance grading, synthesis, and support checking
+- Persistent conversations whose retrieval scope is stored server-side
+- Citations containing document ID/name, page, chunk ID, excerpt, and relevance score
+- Daily per-user AI request limits
+- Cascading deletion across Cloudinary, Pinecone, chunks, messages, and scoped conversations
+- Token-aware, heading-aware chunks with embedding and pipeline version lineage
+- MongoDB query/answer caches invalidated by re-indexing and deletion
+- Trace IDs, token/cost accounting, retrieval relevance, latency, and faithfulness telemetry
+- Server-allowlisted admin metrics and authenticated same-origin PDF previews
 
-- 📄 **PDF Upload & Processing** - Upload PDFs, automatically stored in Cloudinary
-- 🤖 **AI Chat Interface** - Ask questions about your PDFs with intelligent AI responses
-- 🔍 **Vector Search & RAG** - Semantic search using embeddings + retrieval-augmented generation
-- 👤 **User Authentication** - Secure user management with Clerk
-- 📚 **Book Management** - Create, view, and delete your uploaded books
-- 🎨 **Modern UI** - Responsive dark-themed interface with Tailwind CSS
-- 🔒 **Security** - User-level data isolation via Pinecone namespaces
-- ⏱️ **Rate Limiting** - 10 free requests per user per 24 hours (rolling window)
+The answer pipeline is deliberately closed-book. If relevant evidence is not found, it says the selected uploads do not contain enough information.
 
----
+## Architecture
 
-## 🏗️ Project Structure
-
-### **Root Level**
-```
-package.json              # Dependencies & scripts
-tsconfig.json             # TypeScript configuration
-next.config.ts            # Next.js configuration
-eslint.config.mjs         # ESLint rules
-postcss.config.mjs        # Tailwind CSS config
-components.json           # shadcn/ui components config
-```
-
-### **📱 `/app` - Next.js App (Core Application)**
-
-#### **Pages & Layout**
-```
-layout.tsx                # Main layout wrapper
-globals.css               # Global Tailwind styles
-(root)/page.tsx           # Home page (hero + book grid)
-```
-
-#### **📚 `/books` - Book Management**
-```
-[id]/page.tsx             # Book detail page
-[id]/chat/page.tsx        # Chat interface (MAIN FEATURE)
-new/page.tsx              # Upload new book page
+```text
+Browser
+  ├─ /dashboard       document selection, status, retries, deletion
+  ├─ /books/new       bounded multi-file ingestion
+  └─ /chat            persistent multi-document Q&A
+          │
+          ▼
+Next.js route handlers + Clerk auth
+  ├─ MongoDB          documents, chunk audit records, conversations, messages, limits
+  ├─ Cloudinary       authenticated source PDFs
+  ├─ OpenAI           embeddings, routing, grading, grounded answer generation
+  └─ Pinecone         namespace=userId, filter=documentId
 ```
 
-#### **🔧 `/api` - Backend API Routes**
+### Data model
 
-**Books API:**
-- `POST /api/books` - Create new book (upload PDF to Cloudinary, save metadata to MongoDB)
-- `GET /api/books` - List all user's books
-- `GET /api/books/[id]` - Fetch single book details
+- `Book`: source document metadata, owner, storage reference, processing lifecycle, counts, failures
+- `Chunk`: durable audit record for each vector ID and its source/page/chunk metadata
+- `Conversation`: owner, title, `selected | all` scope, fixed selected document IDs
+- `ChatMessage`: conversation, role, content, structured citations
+- `User`: daily AI usage counter
+- `RagCache`: per-user query rewrites and grounded answers with TTL expiry
+- `AiTrace`: 90-day operational, usage, cost, retrieval, and faithfulness metrics
 
-**Chat & RAG:**
-- `POST /api/chat` - **CORE ENDPOINT** - Takes user question → searches Pinecone for relevant PDF chunks → generates answer via OpenAI GPT-3.5-turbo → enforces rate limit (3 requests/24h)
-- `POST /api/upload` - Upload PDF file to Cloudinary
+`Book` is retained as the model name for compatibility with the original project; it represents any uploaded PDF document.
 
-**Payment System (Disabled):**
-- `GET /api/payment/status` - ✅ **ACTIVE** - Returns user's rate limit status (requests used/remaining)
-- `POST /api/payment/checkout` - Disabled (returns 503)
-- `GET /api/payment/verify` - Disabled (returns 503)
-- `POST /api/payment/webhook` - Disabled (returns 503)
+### Ingestion flow
 
-**Health Check:**
-- `GET /api/health` - Returns 200 if app is running
+1. `/api/upload` authenticates the user, validates the upload intent, and returns a short-lived signature scoped to a user-specific Cloudinary path.
+2. The browser verifies the PDF magic bytes and uploads directly to authenticated Cloudinary storage. This avoids Vercel's 4.5 MB Function request-body limit without exposing the Cloudinary secret.
+3. `/api/books` validates the returned storage reference and creates a user-owned `queued` document record.
+4. `/api/books/:id/process` verifies ownership, marks the document `processing`, downloads it through a short-lived signed URL, and verifies the PDF signature server-side.
+5. `pdf-parse` extracts text page by page. It runs as an external Node package so PDF.js workers are not bundled by Turbopack.
+6. If a PDF has no text layer, a bounded OpenAI PDF-vision OCR fallback transcribes visible text while preserving page markers. OCR can be disabled or capped by size/page environment limits.
+7. A token-aware, heading-aware splitter creates overlapping chunks while preserving page metadata.
+8. Every vector receives:
 
-### **🗄️ `/database` - MongoDB Models**
-
-```
-mongoose.ts               # MongoDB connection initialization
-models/book.model.ts      # Book schema (title, author, coverImage, pdfUrl, userId, timestamps)
-models/user.model.ts      # User schema (userId, email, requestCount, lastRequestReset, timestamps)
-```
-
-### **📦 `/components` - React Components**
-
-```
-Navbar.tsx                # Navigation with Clerk auth
-HeroSection.tsx           # Landing page hero section
-BookGrid.tsx              # Grid display of books
-BookCard.tsx              # Individual book card
-ui/button.tsx             # Reusable button component (shadcn/ui)
+```ts
+{
+  userId,
+  documentId,
+  documentName,
+  chunkIndex,
+  pageNumber
+}
 ```
 
-### **📚 `/lib` - Utilities & Integrations**
+9. Vectors are written to the authenticated user's Pinecone namespace. MongoDB chunk records and stable vector IDs make retries and cleanup auditable.
+10. The document becomes `ready`, or stores a stage-specific failure code for retry.
 
-```
-requestLimit.ts           # Rate limiting logic (3 requests/24h)
-langchain.ts              # RAG pipeline (embeddings + Pinecone + OpenAI)
-pinecone.ts               # Pinecone vector DB client
-cloudinary.ts             # Cloudinary file upload client
-utils.ts                  # Helper utilities
-```
+Processing requests are synchronous so serverless execution is not abandoned after an HTTP response. The browser uses a two-worker pool, keeping multi-file ingestion bounded. At larger scale, the processing route is the seam to replace with a durable queue/worker without changing the document lifecycle.
 
-### **📁 `/public` - Static Assets**
+### Multi-document RAG flow
 
-```
-/assets                   # Images, icons, logos
-```
+The chat API never trusts client document IDs directly:
 
----
+1. It authenticates the Clerk user.
+2. For selected scope, it validates the ID count/shape and loads every document with `{ userId, processingStatus: "ready" }`.
+3. For full-library scope, it derives the ready document set from the authenticated user's records.
+4. Existing conversations load their scope from MongoDB; clients cannot silently broaden it.
+5. Retrieval uses `namespace = userId` and a Pinecone `$eq`/`$in` filter for the server-validated document IDs.
+6. Low-scoring results are removed, remaining chunks are relevance-graded, and answers are generated only from those passages.
+7. A support checker either accepts the grounded draft or performs a focused retrieval retry.
+8. The assistant message and structured citations are persisted before the final NDJSON event is sent.
 
-## 🔄 How It Works (Data Flow)
+This provides defense in depth: another user's vectors are outside both the MongoDB ownership query and the Pinecone namespace.
 
-### **User Journey**
+## API surface
 
-```
-1. Sign Up
-   ↓
-   Clerk authenticates → Creates user record in MongoDB
+| Route | Method | Purpose |
+| --- | --- | --- |
+| `/api/upload` | POST | Validate and sign a direct Cloudinary PDF upload |
+| `/api/books` | GET, POST | List or create owned documents |
+| `/api/books/:id` | GET, DELETE | Read or cascade-delete an owned document |
+| `/api/books/:id/process` | POST | Process/retry/re-index an owned document |
+| `/api/books/:id/preview` | GET | Stream an authenticated PDF preview |
+| `/api/chat` | GET | Load an owned conversation |
+| `/api/chat` | POST | Validate scope, retrieve, stream, and persist a grounded answer |
+| `/api/conversations` | GET | List the user's recent conversations |
+| `/api/dashboard` | GET | Return owned document and usage metrics |
+| `/api/health` | GET | Check application/database health |
+| `/api/admin/metrics` | GET | Return allowlisted operational and quality metrics |
 
-2. Upload PDF
-   ↓
-   PDF uploaded → Stored in Cloudinary → Book metadata saved in MongoDB
+`POST /api/chat` accepts:
 
-3. View Book
-   ↓
-   Fetches from MongoDB → Displays cover + metadata
-
-4. Ask Question (RAG Pipeline)
-   ↓
-   Rate limit check:
-   
-   ✅ If allowed (< 3 requests):
-      • Split PDF into chunks using LangChain
-      • Create embeddings (OpenAI text-embedding-3-small)
-      • Store in Pinecone (userId-namespaced for isolation)
-      • Query Pinecone for most similar chunks
-      • Send chunks + question to GPT-3.5-turbo
-      • Return answer + increment requestCount
-   
-   ❌ If limit exceeded:
-      • Return HTTP 429 "10 requests per 24 hours"
-
-5. Wait 24 Hours
-   ↓
-   requestCount resets to 0, can ask 3 more questions
+```json
+{
+  "message": "Compare the recommendations in these documents.",
+  "scope": "selected",
+  "documentIds": ["..."],
+  "conversationId": "optional-existing-conversation"
+}
 ```
 
----
+Use `"scope": "all"` for the full knowledge base. Responses stream newline-delimited JSON events (`status`, `final`, or `error`).
 
-## 🚀 Quick Start
+## Local setup
 
-### Prerequisites
+Requirements:
 
-- **Node.js 18+**
-- **MongoDB Atlas** account (free tier available at mongodb.com/cloud/atlas)
-- **Clerk** account (authentication, free tier at clerk.com)
-- **Cloudinary** account (file storage, free tier at cloudinary.com)
-- **OpenAI API** key (for embeddings + chat, get at platform.openai.com)
-- **Pinecone** account (vector database, free tier at pinecone.io)
-
-### Local Development Setup
-
-#### **1. Clone and Install**
+- Node.js 20+
+- MongoDB
+- Clerk application
+- Cloudinary account
+- OpenAI API key
+- Pinecone index compatible with the selected embedding dimensions
 
 ```bash
-git clone https://github.com/your-username/ai-book-saas.git
-cd ai-book-saas
 npm install
-```
-
-#### **2. Create `.env.local` with All Variables**
-
-```bash
-# MongoDB
-MONGODB_URI=mongodb+srv://user:password@cluster0.mongodb.net/ai-book-saas
-
-# Clerk Authentication
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_xxxxx
-CLERK_SECRET_KEY=sk_test_xxxxx
-
-# OpenAI (embeddings + chat)
-OPENAI_API_KEY=sk-proj-xxxxx
-
-# Pinecone Vector Database
-PINECONE_API_KEY=pcn-xxxxx
-PINECONE_INDEX_NAME=ai-book-index
-PINECONE_NAMESPACE_PREFIX=user
-
-# Cloudinary File Storage
-NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME=your-cloud-name
-CLOUDINARY_API_KEY=123456789
-CLOUDINARY_API_SECRET=abc123def456
-```
-
-#### **3. Start Development Server**
-
-```bash
+cp .env.example .env.local
 npm run dev
 ```
 
-Visit `http://localhost:3000` and test:
-- Sign up with Clerk
-- Upload a PDF
-- Ask 10 questions (verify rate limiting works)
-- Try 11th question (should get 429 error)
+On PowerShell, copy with:
 
----
-
-## 📦 Tech Stack
-
-| Layer | Technology | Purpose |
-|-------|-----------|---------|
-| **Frontend** | React 19, TypeScript, Tailwind CSS, shadcn/ui | UI components & styling |
-| **Framework** | Next.js 16 | Full-stack (frontend + backend) |
-| **Backend** | Next.js API Routes | Serverless functions |
-| **Auth** | Clerk | User signup/login/management |
-| **Database** | MongoDB + Mongoose | Store books & user rate limits |
-| **AI/LLM** | OpenAI | Text embeddings + chat responses |
-| **Vector DB** | Pinecone | Semantic search for PDF chunks |
-| **RAG** | LangChain | Orchestrate embeddings + retrieval + chat |
-| **File Storage** | Cloudinary | PDF & image hosting |
-| **Deployment** | Vercel (recommended) | Serverless hosting |
-
----
-
-## 🧪 Testing
-
-### **Rate Limiting Test**
-
-```bash
-npm run dev
-# 1. Open http://localhost:3000
-# 2. Upload a PDF
-# 3. Go to book → chat
-# 4. Ask 10 questions
-#    - Verify counter shows "10/10" → "9/10" → ... → "0/10"
-# 5. Try 11th question
-#    - Should get 429 error: "10 requests per 24 hours. Please try again tomorrow."
+```powershell
+Copy-Item .env.example .env.local
 ```
 
-### **API Testing**
+Required environment variables:
 
-```bash
-# Check app health
-curl http://localhost:3000/api/health
-
-# Check rate limit status (requires auth token)
-curl http://localhost:3000/api/payment/status \
-  -H "Authorization: Bearer <clerk-token>"
+```dotenv
+MONGODB_URI=
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
+CLERK_SECRET_KEY=
+CLOUDINARY_CLOUD_NAME=
+CLOUDINARY_API_KEY=
+CLOUDINARY_API_SECRET=
+OPENAI_API_KEY=
+PINECONE_API_KEY=
+PINECONE_INDEX=
 ```
 
----
+Optional tuning:
 
-## 🏗️ Build & Deployment
-
-### **Local Testing**
-
-```bash
-# Type checking
-npm run type-check          # Zero errors
-
-# Linting
-npm run lint                # No ESLint errors
-
-# Production build
-npm run build               # Builds .next folder
+```dotenv
+OPENAI_CHAT_MODEL=gpt-4o-mini
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+OPENAI_OCR_MODEL=gpt-4o-mini
+ENABLE_PDF_OCR=true
+OCR_MAX_PDF_BYTES=10485760
+OCR_MAX_PAGES=20
+AI_DAILY_REQUEST_LIMIT=10
+RAG_MIN_RELEVANCE_SCORE=0.25
+EMBEDDING_VERSION=1
+RAG_CHUNK_TOKENS=500
+RAG_CHUNK_OVERLAP_TOKENS=75
+RAG_CACHE_TTL_MS=3600000
+QUERY_CACHE_TTL_MS=86400000
+ADMIN_USER_IDS=
+AI_INPUT_COST_PER_MILLION=0
+AI_OUTPUT_COST_PER_MILLION=0
 ```
 
-### **Deploy to Vercel (Recommended)**
+Changing the embedding model or dimensions requires a compatible Pinecone index and reprocessing existing documents.
 
-#### **Step 1: Push to GitHub**
-
-```bash
-git init
-git add .
-git commit -m "Initial commit"
-git remote add origin https://github.com/your-username/ai-book-saas.git
-git branch -M main
-git push -u origin main
-```
-
-#### **Step 2: Deploy on Vercel**
+## Verification
 
 ```bash
-# Option A: CLI
-npm i -g vercel
-vercel                      # Follow prompts
-
-# Option B: Dashboard
-# 1. Go to vercel.com/dashboard
-# 2. Click "Add New" → "Project"
-# 3. Select "ai-book-saas" from GitHub
-# 4. Click "Deploy"
-```
-
-#### **Step 3: Add Environment Variables**
-
-On Vercel Dashboard:
-1. Click your project → **Settings**
-2. Click **Environment Variables** (left sidebar)
-3. Add all 9 variables from `.env.local`
-4. Select all environments (Production, Preview, Development)
-5. Click "Redeploy"
-
-#### **Step 4: Verify Deployment**
-
-```bash
-# Your app is live at: https://ai-book-saas-xxx.vercel.app
-# Test:
-# 1. Sign up
-# 2. Upload PDF
-# 3. Test chat (3 requests)
-# 4. Verify rate limiting
-```
-
-#### **Step 5: Auto-Deploy**
-
-Now every push to GitHub automatically deploys:
-
-```bash
-# Make changes
-git add .
-git commit -m "Update feature"
-git push origin main        # Vercel auto-deploys
-```
-
-### **Alternative: Deploy to Other Platforms**
-
-**Railway.app:**
-```bash
-# 1. Push to GitHub
-# 2. Go to railway.app
-# 3. New Project → Deploy from GitHub
-# 4. Select repo
-# 5. Add 9 environment variables
-# 6. Deploy
-```
-
-**Render.com:**
-```bash
-# 1. Push to GitHub
-# 2. Go to render.com
-# 3. New Web Service → Connect GitHub
-# 4. Build: npm install && npm run build
-# 5. Start: npm run start
-# 6. Add environment variables
-# 7. Deploy
-```
-
-**Traditional VPS (DigitalOcean, AWS EC2, Linode):**
-```bash
-# SSH into server
-ssh root@your-server.com
-
-# Install Node.js
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs npm
-
-# Clone & setup
-git clone https://github.com/your-username/ai-book-saas.git
-cd ai-book-saas
-npm install
-nano .env.local              # Add all 9 variables
-
-# Build
-npm run build
-
-# Start with PM2
-sudo npm i -g pm2
-pm2 start "npm run start" --name ai-book-saas
-pm2 startup && pm2 save
-
-# Setup Nginx reverse proxy + SSL
-# (See Vercel deployment for better managed experience)
-```
-
----
-
-## 📝 Available Scripts
-
-```bash
-npm run dev                  # Start development server (port 3000)
-npm run build               # Build production bundle
-npm run start               # Start production server
-npm run type-check          # TypeScript type checking
-npm run lint                # ESLint code linting
-```
-
----
-
-## 🔐 Environment Variables Reference
-
-| Variable | Source | Purpose |
-|----------|--------|---------|
-| `MONGODB_URI` | MongoDB Atlas | Database connection string |
-| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk Dashboard | Public authentication key |
-| `CLERK_SECRET_KEY` | Clerk Dashboard | Secret authentication key |
-| `OPENAI_API_KEY` | OpenAI Platform | GPT-3.5 and embeddings API |
-| `PINECONE_API_KEY` | Pinecone Dashboard | Vector database access |
-| `PINECONE_INDEX_NAME` | Pinecone Dashboard | Your vector index name |
-| `PINECONE_NAMESPACE_PREFIX` | Custom | Set to "user" for isolation |
-| `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME` | Cloudinary Dashboard | Cloud name for uploads |
-| `CLOUDINARY_API_KEY` | Cloudinary Dashboard | API key for uploads |
-| `CLOUDINARY_API_SECRET` | Cloudinary Dashboard | API secret for uploads |
-
----
-
-## 🐛 Troubleshooting
-
-| Issue | Solution |
-|-------|----------|
-| Build fails | Run `npm run type-check` to see TypeScript errors |
-| App won't start | Check `.env.local` has all 9 variables |
-| Upload fails | Verify Cloudinary credentials in `.env.local` |
-| Chat returns error | Check OpenAI API key is valid |
-| Rate limiting not working | Verify MongoDB connection |
-| Clerk auth fails | Check Clerk keys match your app |
-
----
-
-## 📄 License
-
-MIT License - feel free to use for any purpose
-
----
-
-## 🤝 Support
-
-For issues or questions:
-1. Check the troubleshooting section above
-2. Review environment variables
-3. Check MongoDB, Clerk, OpenAI, Pinecone dashboards for API errors
-4. Test locally first before deploying
-
----
-
-## 🚀 Next Steps
-
-1. ✅ Set up all service accounts (MongoDB, Clerk, OpenAI, Pinecone, Cloudinary)
-2. ✅ Create `.env.local` with all variables
-3. ✅ Run locally: `npm run dev`
-4. ✅ Test rate limiting with 3+ requests
-5. ✅ Deploy to Vercel: `npm i -g vercel && vercel --prod`
-6. ✅ Add environment variables on Vercel dashboard
-7. ✅ Test on production URL
-
-**Happy building! 🎉**
-
-## 🏗️ Architecture & Stack
-
-### Frontend
-- **Next.js 16** - React framework
-- **React 19** - UI library
-- **TypeScript** - Type safety
-- **Tailwind CSS** - Styling
-- **Radix UI** - Accessible components
-
-### Backend
-- **Next.js API Routes** - Serverless backend
-- **Node.js** - Runtime
-- **TypeScript** - Type safety
-
-### Integrations
-- **Clerk** - Authentication & user management
-- **MongoDB** - Book metadata and user request tracking
-- **Mongoose** - ODM for MongoDB
-- **Cloudinary** - PDF and image storage
-- **OpenAI** - LLM and embeddings
-- **LangChain** - AI orchestration
-- **Pinecone** - Vector database
-- **pdf2json** - PDF text extraction
-
-## 📦 Deployment
-
-### Option 1: Vercel (Recommended for Next.js)
-
-```bash
-npm i -g vercel
-vercel login
-vercel
-```
-
-Then add all environment variables in Vercel dashboard under Project Settings → Environment Variables.
-
-### Option 2: Docker
-
-```bash
-# Build and run with Docker Compose
-docker-compose up -d
-
-# Check health
-curl http://localhost:3000/api/health
-```
-
-### Option 3: Manual Deployment
-
-```bash
-npm run build
-npm run start
-```
-
-## 📊 API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/health` | Health check |
-| POST | `/api/books` | Create book |
-| GET | `/api/books` | List user's books |
-| GET | `/api/books/:id` | Get book details |
-| DELETE | `/api/books/:id` | Delete book |
-| POST | `/api/chat` | Send chat message (rate limited: 3/day) |
-| POST | `/api/upload` | Upload file to Cloudinary |
-
-## 🧪 Testing
-
-```bash
-# Run tests
-npm run test
-
-# Watch mode
-npm run test:watch
-
-# Coverage report
-npm run test:coverage
-```
-
-## ✅ Code Quality
-
-```bash
-# Type checking
 npm run type-check
-
-# Linting
 npm run lint
-
-# Fix linting issues
-npm run lint:fix
+npm run build
+npm run test:providers
+npm run test:rag
 ```
 
-## 🔐 Environment Variables
+`test:providers` checks each configured provider independently. `test:rag` runs a generated PDF through extraction, chunk persistence, embeddings, vector indexing, filtered retrieval, grounded answering, and citations, then cleans every test artifact. `diagnose:processing` reports sanitized ingestion status. `diagnose:extraction` tests the newest failed upload locally without printing content. `diagnose:ocr` and `reprocess:document` send document content to configured external AI/vector providers and should only be run when that export is explicitly approved.
 
-Copy `.env.example` to `.env.local` and fill in:
+High-value integration scenarios:
 
-```env
-MONGODB_URI=mongodb+srv://...
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
-CLERK_SECRET_KEY=sk_test_...
-CLOUDINARY_CLOUD_NAME=your_cloud_name
-CLOUDINARY_API_KEY=your_api_key
-CLOUDINARY_API_SECRET=your_api_secret
-OPENAI_API_KEY=sk-...
-PINECONE_API_KEY=your_api_key
-PINECONE_INDEX=your_index_name
-```
+1. Upload two PDFs and confirm their state transitions independently.
+2. Ask a question against only document A; verify all returned citation `documentId` values are A.
+3. Ask across A+B and verify citations can originate from either but never an unselected document.
+4. Use full-library scope and verify only the authenticated user's ready documents are queried.
+5. Ask an out-of-scope question and verify the insufficient-information response.
+6. Attempt to retrieve/chat/delete another user's document ID and expect 404/409 without data leakage.
+7. Delete a document and verify its vectors, chunk records, source file, legacy messages, and selected-scope conversations are removed.
+8. Force extraction failure and verify the failed state and retry action.
 
-## 🔄 CI/CD Pipeline
+## Deployment notes
 
-GitHub Actions workflow automatically:
-- ✅ Runs linting on every PR
-- ✅ Type checks TypeScript
-- ✅ Builds the project
-- ✅ Deploys to Vercel on merge to main
+- Import the Git repository into Vercel; the Next.js preset, `npm install`, `next build`, and `.next` output are auto-detected.
+- Set every variable from `.env.production.example` in Vercel for the appropriate Production and Preview environments.
+- Use a Clerk production instance (`pk_live_` / `sk_live_`) and a custom production domain. Keep development keys scoped to Preview/Development.
+- Enable Vercel Fluid Compute. Text PDFs commonly finish within the free-plan 60-second ceiling; OCR and larger documents need a paid plan because processing and chat routes allow up to 300 seconds.
+- PDFs upload directly from the browser to Cloudinary using a server-generated signature, avoiding Vercel's 4.5 MB Function payload limit.
+- Deploy on the Node.js 20+ runtime; PDF parsing is not Edge-compatible.
+- Keep the Pinecone index metric/model dimensions aligned.
+- Cloudinary sources use authenticated delivery; never expose API secrets to the client.
+- Route handlers perform authorization themselves in addition to Clerk middleware.
+- Logs are structured around ingestion/chat lifecycle events and are ready to be forwarded by the hosting provider. Add Sentry/OpenTelemetry at the `logger` boundary when an external monitoring destination is selected.
+- For sustained ingestion volume, enqueue `/process` jobs in a durable queue and run the existing processing service in a worker with leases/retries.
 
-See `.github/workflows/deploy.yml` for configuration.
+## Security decisions
 
-## 📝 How It Works
-
-1. **Upload PDF** → File stored in Cloudinary
-2. **Process PDF** → Text extracted and split into chunks
-3. **Generate Embeddings** → Chunks embedded using OpenAI
-4. **Store Vectors** → Embeddings stored in Pinecone
-5. **User Query** → Question embedded and similar chunks retrieved
-6. **Generate Response** → GPT generates answer based on context
-7. **Stream Response** → Answer sent back to user
-
-## 🛠️ Development
-
-```bash
-# Format code
-npm run lint:fix
-
-# Type check
-npm run type-check
-
-# Development with hot reload
-npm run dev
-```
-
-## 🚨 Troubleshooting
-
-### OpenAI Quota Error
-**Issue:** `429 You exceeded your current quota`
-
-**Solution:**
-1. Go to https://platform.openai.com/account/billing/overview
-2. Check usage and add payment method
-3. Generate new API key if needed
-
-### PDF Not Processing
-**Solution:**
-1. Check Cloudinary credentials
-2. Verify OpenAI API key has sufficient quota
-3. Check Pinecone index exists and is accessible
-4. Review console logs: `npm run dev`
-
-### Database Connection Issues
-**Solution:**
-1. Verify MongoDB connection string
-2. Check IP whitelist in MongoDB Atlas
-3. Test connection with: `/api/health`
-
-## 📄 License
-
-MIT
-
-## 🤝 Contributing
-
-Pull requests are welcome! Please ensure:
-- All tests pass
-- Code is linted
-- No TypeScript errors
-- Changes are documented
-
-## 📞 Support
-
-For issues and questions, please open a GitHub issue.
-
-## 🔗 Links
-
-- [Next.js Docs](https://nextjs.org/docs)
-- [LangChain Docs](https://docs.langchain.com)
-- [OpenAI API Docs](https://platform.openai.com/docs)
-- [Pinecone Docs](https://docs.pinecone.io)
-- [Clerk Docs](https://clerk.com/docs)
-
+- File extensions and MIME headers are insufficient; upload and processing both verify magic bytes.
+- User ownership is included in all document, conversation, chunk, and chat operations.
+- Pinecone isolation uses both a user namespace and server-derived document filters.
+- AI limits fail closed if the limiter database is unavailable.
+- Raw provider errors are logged server-side; API responses return safe messages.
+- The upload UI limits concurrency, while server routes enforce their own size and selection limits.

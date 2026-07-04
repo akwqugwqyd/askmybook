@@ -30,8 +30,22 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env.local
+# environment files (keep only sanitized templates)
+.env*
+!.env.example
+!.env.production.example
+
+# local package/provider credentials
+.npmrc
+.netrc
+credentials*.json
+service-account*.json
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
 node_modules
 .next
 

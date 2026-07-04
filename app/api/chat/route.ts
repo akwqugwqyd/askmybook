@@ -1,137 +1,332 @@
 import { NextRequest, NextResponse } from "next/server"
 import { auth } from "@clerk/nextjs/server"
-import { OpenAIEmbeddings, ChatOpenAI } from "@langchain/openai"
-import { PineconeStore } from "@langchain/pinecone"
-import pineconeClient from "@/lib/pinecone"
-import { checkRequestLimit, getUserRequestStatus } from "@/lib/requestLimit"
+import mongoose from "mongoose"
+import { checkRequestLimit, getUserRequestStatus } from "@/lib/ai-rate-limit"
 import { logger } from "@/lib/logger"
+import { streamAgenticRag, type AgenticRagGraphUpdate } from "@/lib/agentic-rag"
+import dbConnect from "@/database/mongoose"
+import Book from "@/database/models/book.model"
+import ChatMessage from "@/database/models/chat-message.model"
+import Conversation, { type ConversationScope } from "@/database/models/conversation.model"
+import { answerCacheKey, getCachedAnswer, setCachedAnswer } from "@/lib/rag-cache"
+import { createTraceId, estimateCost, estimateTokens, recordTrace } from "@/lib/telemetry"
+import { chatRequestSchema } from "@/lib/validation"
+import { CURRENT_EMBEDDING_VERSION, CURRENT_INDEXING_VERSION } from "@/lib/ai-config"
+
+export const runtime = "nodejs"
+export const maxDuration = 300
+
+type RequestStatus = Awaited<ReturnType<typeof getUserRequestStatus>>
+type ChatStreamEvent =
+    | { type: "status"; status: string; node?: string; conversationId?: string }
+    | {
+        type: "final"
+        reply: string
+        requestStatus: RequestStatus
+        conversationId: string
+        citations?: AgenticRagGraphUpdate["citations"]
+      }
+    | { type: "error"; error: string; requestStatus?: RequestStatus }
+
+const encodeEvent = (event: ChatStreamEvent): Uint8Array =>
+    new TextEncoder().encode(`${JSON.stringify(event)}\n`)
+
+export async function GET(req: NextRequest) {
+    try {
+        const { userId } = await auth()
+        if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+        const conversationId = req.nextUrl.searchParams.get("conversationId")?.trim()
+        if (!conversationId) {
+            return NextResponse.json({ error: "conversationId is required." }, { status: 400 })
+        }
+
+        await dbConnect()
+        const conversation = await Conversation.findOne({ _id: conversationId, userId }).lean()
+        if (!conversation) return NextResponse.json({ error: "Conversation not found." }, { status: 404 })
+        const messages = await ChatMessage.find({ userId, conversationId })
+            .sort({ createdAt: 1 })
+            .limit(200)
+            .lean()
+        return NextResponse.json({ success: true, conversation, messages })
+    } catch (error) {
+        logger.error("Chat history load error:", error)
+        return NextResponse.json({ error: "We could not load this conversation." }, { status: 500 })
+    }
+}
 
 export async function POST(req: NextRequest) {
     try {
         const { userId } = await auth()
         if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+        const traceId = createTraceId()
+        const startedAt = Date.now()
 
-        // Check request limit
-        const limitCheck = await checkRequestLimit(userId)
-        const status = await getUserRequestStatus(userId)
+        const parsed = chatRequestSchema.safeParse(await req.json())
+        if (!parsed.success) return NextResponse.json({ error: "Invalid chat request." }, { status: 400 })
+        const body = parsed.data
+        const message = body.message
 
-        if (!limitCheck.allowed) {
-            logger.warn(`Request limit exceeded for user ${userId}`)
+        await dbConnect()
+        const existingConversationId = body.conversationId || ""
+        let scope: ConversationScope
+        let documentIds: string[]
+        let conversation
+
+        if (existingConversationId) {
+            if (!mongoose.isValidObjectId(existingConversationId)) {
+                return NextResponse.json({ error: "Invalid conversation." }, { status: 400 })
+            }
+            conversation = await Conversation.findOne({ _id: existingConversationId, userId })
+            if (!conversation) return NextResponse.json({ error: "Conversation not found." }, { status: 404 })
+            scope = conversation.scope
+            documentIds = conversation.documentIds
+        } else {
+            scope = body.scope
+            documentIds = [...new Set(body.documentIds)]
+            if (scope === "selected" && documentIds.length === 0) {
+                return NextResponse.json({
+                    error: "Select at least one document.",
+                }, { status: 400 })
+            }
+        }
+
+        const documentQuery = scope === "all"
+            ? {
+                userId,
+                processingStatus: "ready",
+                indexingVersion: { $gte: CURRENT_INDEXING_VERSION },
+                embeddingVersion: CURRENT_EMBEDDING_VERSION,
+            }
+            : {
+                userId,
+                _id: { $in: documentIds },
+                processingStatus: "ready",
+                indexingVersion: { $gte: CURRENT_INDEXING_VERSION },
+                embeddingVersion: CURRENT_EMBEDDING_VERSION,
+            }
+        const ownedDocuments = await Book.find(documentQuery)
+            .select("_id title documentName embeddingVersion")
+            .lean()
+        if (scope === "selected" && ownedDocuments.length !== documentIds.length) {
             return NextResponse.json({
-                success: false,
-                error: "Free tier limit reached (10 requests per 24 hours)",
-                message: `You've used all ${limitCheck.limit} free requests today. Please try again tomorrow.`,
-                requestStatus: status,
+                error: "Every selected document must exist, belong to you, and be ready.",
+            }, { status: 409 })
+        }
+        if (ownedDocuments.length === 0) {
+            return NextResponse.json({ error: "No processed documents are available to search." }, { status: 409 })
+        }
+        documentIds = ownedDocuments.map((document) => String(document._id))
+
+        const cacheKey = answerCacheKey(
+            message,
+            documentIds,
+            Math.max(...ownedDocuments.map((document) => document.embeddingVersion || 1)),
+        )
+        const limitCheck = await checkRequestLimit(userId)
+        const requestStatus = await getUserRequestStatus(userId)
+        if (!limitCheck.allowed) {
+            return NextResponse.json({
+                error: "Daily limit of 10 chat requests reached. Please try again after the limit resets.",
+                requestStatus,
             }, { status: 429 })
         }
+        const cachedAnswer = existingConversationId
+            ? null
+            : await getCachedAnswer(userId, cacheKey)
 
-        const { message, bookId } = await req.json()
-        if (!message || !bookId) return NextResponse.json({ error: "Message and bookId required" }, { status: 400 })
-
-        const embeddings = new OpenAIEmbeddings({
-            openAIApiKey: process.env.OPENAI_API_KEY,
-            model: "text-embedding-3-small",
-        })
-
-        logger.info(`[CHAT] 1️⃣ Embedding user message...`)
-        
-        const indexName = process.env.PINECONE_INDEX!
-        logger.info(`[CHAT] 2️⃣ Getting Pinecone index: ${indexName}`)
-        
-        const pineconeIndex = pineconeClient.index(indexName)
-        logger.info(`[CHAT] 3️⃣ Index retrieved successfully`)
-
-        logger.info(`[CHAT] 4️⃣ Creating PineconeStore for namespace: ${bookId}`)
-        
-        let vectorStore
-        try {
-            vectorStore = await PineconeStore.fromExistingIndex(embeddings, {
-                pineconeIndex,
-                namespace: bookId,
+        if (!conversation) {
+            conversation = await Conversation.create({
+                userId,
+                title: message.slice(0, 80),
+                scope,
+                documentIds: scope === "all" ? [] : documentIds,
+                lastMessageAt: new Date(),
             })
-            logger.info(`[CHAT] ✅ PineconeStore created successfully`)
-        } catch (storeError) {
-            logger.error(`[CHAT] ❌ Failed to create PineconeStore:`, storeError)
-            throw storeError
         }
+        const conversationId = String(conversation._id)
+        const history = existingConversationId
+            ? await ChatMessage.find({ userId, conversationId })
+                .sort({ createdAt: -1 })
+                .limit(6)
+                .lean()
+            : []
+        const conversationContext = history.reverse()
+            .map((item) => `${item.role === "user" ? "User" : "Assistant"}: ${item.content.slice(0, 1200)}`)
+            .join("\n")
 
-        logger.info(`[CHAT] 5️⃣ Embedding question: "${message.substring(0, 100)}"`)
-        
-        let relevantDocs
-        try {
-            relevantDocs = await vectorStore.similaritySearch(message, 8)
-            logger.info(`[CHAT] ✅ Similarity search completed`)
-        } catch (searchError) {
-            logger.error(`[CHAT] ❌ Similarity search failed:`, searchError)
-            throw searchError
-        }
-        
-        logger.info(`[CHAT] 6️⃣ Found ${relevantDocs.length} relevant documents`)
-        
-        if (relevantDocs.length === 0) {
-            logger.warn(`[CHAT] ⚠️ NO DOCUMENTS FOUND - This likely means PDF was never embedded`)
-            logger.warn(`[CHAT] Check: 1) Did PDF upload succeed? 2) Check /api/debug/vectors?bookId=${bookId}`)
-        } else {
-            logger.info(`[CHAT] ✅ Found chunks with content lengths: ${relevantDocs.map(d => d.pageContent.length).join(", ")}`)
-        }
-        
-        const llm = new ChatOpenAI({
-            openAIApiKey: process.env.OPENAI_API_KEY,
-            modelName: "gpt-3.5-turbo",
-            temperature: 0.7,
-        })
-
-        let systemPrompt: string
-        let userMessage: string
-
-        if (relevantDocs.length > 0) {
-            // Answer based on PDF content - PRODUCTION GRADE
-            const context = relevantDocs.map(doc => doc.pageContent).join("\n\n")
-            systemPrompt = `You are an expert AI assistant analyzing a document. Your task is to answer questions based ONLY on the provided document content.
-
-IMPORTANT INSTRUCTIONS:
-1. Answer directly and confidently using ONLY the provided document content
-2. Extract specific details, names, dates, numbers, skills from the document
-3. Do NOT apologize or say you don't have access - you have the document content
-4. Provide detailed, factual answers based on what's in the document
-5. If information is not in the document, explicitly say "This information is not mentioned in the document"
-6. Always cite relevant sections when answering
-
-DOCUMENT CONTENT:
-${context}
-
-Remember: You have complete access to the document content above. Answer with confidence and specificity.`
-            userMessage = message
-        } else {
-            // Answer as general knowledge question
-            systemPrompt = `You are a helpful AI assistant. Answer the user's question using your general knowledge. Be concise and accurate.`
-            userMessage = message
-        }
-
-        const response = await llm.invoke([
-            {
-                role: "system",
-                content: systemPrompt
-            },
-            {
+        await Promise.all([
+            ChatMessage.create({
+                userId,
+                conversationId,
                 role: "user",
-                content: userMessage,
-            }
+                content: message,
+                citations: [],
+            }),
+            Conversation.updateOne({ _id: conversationId, userId }, { lastMessageAt: new Date() }),
         ])
 
-        const reply = typeof response.content === 'string' ? response.content : String(response.content)
+        logger.info("[CHAT] Starting grounded retrieval", {
+            userId,
+            conversationId,
+            scope,
+            documentCount: documentIds.length,
+        })
 
-        return NextResponse.json({
-            success: true,
-            reply,
-            requestStatus: status,
-        }, { status: 200 })
+        const stream = new ReadableStream<Uint8Array>({
+            async start(controller) {
+                let finalReply = ""
+                try {
+                    if (cachedAnswer) {
+                        finalReply = cachedAnswer.reply
+                        await ChatMessage.create({
+                            userId,
+                            conversationId,
+                            role: "assistant",
+                            content: finalReply,
+                            citations: cachedAnswer.citations,
+                            status: "cache_hit",
+                        })
+                        controller.enqueue(encodeEvent({
+                            type: "final",
+                            reply: finalReply,
+                            requestStatus,
+                            conversationId,
+                            citations: cachedAnswer.citations,
+                        }))
+                        const outputTokens = estimateTokens(finalReply)
+                        await recordTrace({
+                            traceId,
+                            userId,
+                            route: "/api/chat",
+                            status: "success",
+                            durationMs: Date.now() - startedAt,
+                            modelName: process.env.OPENAI_CHAT_MODEL || "gpt-4o-mini",
+                            documentCount: documentIds.length,
+                            cacheHit: true,
+                            inputTokens: estimateTokens(message),
+                            outputTokens,
+                            estimatedCostUsd: 0,
+                            retrievedChunks: cachedAnswer.citations.length,
+                            citationCount: cachedAnswer.citations.length,
+                            averageRelevance: cachedAnswer.citations.length
+                                ? cachedAnswer.citations.reduce((sum, citation) => sum + (citation.relevance || 0), 0)
+                                    / cachedAnswer.citations.length
+                                : undefined,
+                            faithfulnessScore: 1,
+                        })
+                        return
+                    }
 
+                    controller.enqueue(encodeEvent({
+                        type: "status",
+                        status: "Searching your documents...",
+                        node: "start",
+                        conversationId,
+                    }))
+
+                    for await (const update of streamAgenticRag(
+                        message,
+                        { userId, documentIds },
+                        conversationContext,
+                    )) {
+                        controller.enqueue(encodeEvent({
+                            type: "status",
+                            status: update.status,
+                            node: update.node,
+                            conversationId,
+                        }))
+                        if (!update.finalAnswer || finalReply) continue
+
+                        finalReply = update.finalAnswer
+                        await ChatMessage.create({
+                            userId,
+                            conversationId,
+                            role: "assistant",
+                            content: finalReply,
+                            citations: update.citations ?? [],
+                            status: update.status,
+                        })
+                        if (!existingConversationId) {
+                            await setCachedAnswer(userId, cacheKey, {
+                                reply: finalReply,
+                                citations: update.citations ?? [],
+                            })
+                        }
+                        controller.enqueue(encodeEvent({
+                            type: "final",
+                            reply: finalReply,
+                            requestStatus,
+                            conversationId,
+                            citations: update.citations,
+                        }))
+                        const citations = update.citations ?? []
+                        const inputTokens = update.tokenUsage?.inputTokens
+                            || estimateTokens(`${conversationContext}\n${message}`)
+                        const outputTokens = update.tokenUsage?.outputTokens
+                            || estimateTokens(finalReply)
+                        await recordTrace({
+                            traceId,
+                            userId,
+                            route: "/api/chat",
+                            status: "success",
+                            durationMs: Date.now() - startedAt,
+                            modelName: process.env.OPENAI_CHAT_MODEL || "gpt-4o-mini",
+                            documentCount: documentIds.length,
+                            cacheHit: false,
+                            inputTokens,
+                            outputTokens,
+                            estimatedCostUsd: estimateCost(inputTokens, outputTokens),
+                            retrievedChunks: citations.length,
+                            citationCount: citations.length,
+                            averageRelevance: citations.length
+                                ? citations.reduce((sum, citation) => sum + (citation.relevance || 0), 0)
+                                    / citations.length
+                                : undefined,
+                            faithfulnessScore: update.status === "Complete" ? 1 : 0.5,
+                        })
+                    }
+
+                    if (!finalReply) throw new Error("The answer pipeline did not return a final response.")
+                } catch (streamError) {
+                    logger.error("Chat stream error:", streamError)
+                    await recordTrace({
+                        traceId,
+                        userId,
+                        route: "/api/chat",
+                        status: "error",
+                        durationMs: Date.now() - startedAt,
+                        modelName: process.env.OPENAI_CHAT_MODEL || "gpt-4o-mini",
+                        documentCount: documentIds.length,
+                        cacheHit: false,
+                        inputTokens: estimateTokens(message),
+                        outputTokens: 0,
+                        estimatedCostUsd: 0,
+                        retrievedChunks: 0,
+                        citationCount: 0,
+                        errorCode: "CHAT_STREAM_FAILED",
+                    })
+                    controller.enqueue(encodeEvent({
+                        type: "error",
+                        error: "The document search could not be completed. Your question was saved; please retry.",
+                        requestStatus,
+                    }))
+                } finally {
+                    controller.close()
+                }
+            },
+        })
+
+        return new Response(stream, {
+            headers: {
+                "Content-Type": "application/x-ndjson; charset=utf-8",
+                "Cache-Control": "no-cache, no-transform",
+                Connection: "keep-alive",
+                "X-Content-Type-Options": "nosniff",
+                "X-Trace-Id": traceId,
+            },
+        })
     } catch (error) {
-        logger.error("Chat API Error:", error)
-        const errorMessage = error instanceof Error ? error.message : String(error)
-        return NextResponse.json({ error: errorMessage }, { status: 500 })
+        logger.error("Chat API error:", error)
+        return NextResponse.json({ error: "The chat request could not be completed." }, { status: 500 })
     }
 }
-
-

@@ -1,5 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+    // PDF.js workers must be resolved by Node at runtime, not bundled by Turbopack.
+    serverExternalPackages: ["pdf-parse"],
     images: {
         remotePatterns: [
             {
@@ -19,7 +21,7 @@ const nextConfig = {
                     },
                     {
                         key: "X-Frame-Options",
-                        value: "DENY",
+                        value: "SAMEORIGIN",
                     },
                     {
                         key: "X-XSS-Protection",
@@ -36,4 +38,3 @@ const nextConfig = {
 }
 
 module.exports = nextConfig
-

@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server"
 import dbConnect from "@/database/mongoose"
 import { logger } from "@/lib/logger"
+import { validateEnv } from "@/lib/env"
 
 export async function GET() {
   try {
+    validateEnv()
     await dbConnect()
     
     logger.info("Health check passed")
