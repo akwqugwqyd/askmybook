@@ -244,6 +244,16 @@ const citationsFromEvidence = (evidence: RetrievedChunk[] = []): SourceCitation[
     return citations
 }
 
+const isInsufficientAnswer = (answer: string): boolean =>
+    /(?:do|does) not contain enough(?: supported)? information|insufficient information/i
+        .test(answer)
+
+const citationsForAnswer = (
+    answer: string,
+    evidence: RetrievedChunk[] = [],
+): SourceCitation[] =>
+    isInsufficientAnswer(answer) ? [] : citationsFromEvidence(evidence)
+
 const buildFallbackAnswer = (question: string, chunks: RetrievedChunk[]): string => {
     if (chunks.length === 0) {
         return "The selected uploaded documents do not contain enough information to answer that question."
@@ -503,10 +513,11 @@ const createAnswerGeneratorNode = () => async (state: AgenticRagState): Promise<
             },
         ])
         const draftAnswer = stringifyMessageContent(response.content).trim()
+        const resolvedDraft = draftAnswer || buildFallbackAnswer(state.question, evidence)
 
         return {
-            draftAnswer: draftAnswer || buildFallbackAnswer(state.question, evidence),
-            citations: citationsFromEvidence(evidence),
+            draftAnswer: resolvedDraft,
+            citations: citationsForAnswer(resolvedDraft, evidence),
             status: "Verifying answer...",
         }
     } catch (error) {
@@ -514,7 +525,7 @@ const createAnswerGeneratorNode = () => async (state: AgenticRagState): Promise<
         const draftAnswer = buildFallbackAnswer(state.question, evidence)
         return {
             draftAnswer,
-            citations: citationsFromEvidence(evidence),
+            citations: citationsForAnswer(draftAnswer, evidence),
             status: "Verifying answer...",
         }
     }
@@ -524,9 +535,10 @@ const createHallucinationCheckerNode = () => async (state: AgenticRagState): Pro
     const evidence = state.gradedChunks.synthesised ?? collectBestChunks(state)
 
     if (!state.draftAnswer.trim()) {
+        const finalAnswer = buildFallbackAnswer(state.question, evidence)
         return {
-            finalAnswer: buildFallbackAnswer(state.question, evidence),
-            citations: citationsFromEvidence(evidence),
+            finalAnswer,
+            citations: citationsForAnswer(finalAnswer, evidence),
             status: "Using best available answer...",
         }
     }
@@ -547,7 +559,7 @@ const createHallucinationCheckerNode = () => async (state: AgenticRagState): Pro
         if (result.supported || result.unsupportedClaims.length === 0) {
             return {
                 finalAnswer: state.draftAnswer,
-                citations: citationsFromEvidence(evidence),
+                citations: citationsForAnswer(state.draftAnswer, evidence),
                 status: "Complete",
             }
         }
@@ -570,7 +582,7 @@ const createHallucinationCheckerNode = () => async (state: AgenticRagState): Pro
         logger.warn("[AGENTIC_RAG] Hallucination checker failed; accepting best available draft.", error)
         return {
             finalAnswer: state.draftAnswer,
-            citations: citationsFromEvidence(evidence),
+            citations: citationsForAnswer(state.draftAnswer, evidence),
             status: "Using best available answer...",
         }
     }

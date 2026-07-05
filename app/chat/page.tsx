@@ -71,6 +71,10 @@ const withoutInlineCitations = (content: string): string =>
         .replace(/[ \t]+\n/g, "\n")
         .trim()
 
+const isInsufficientAnswer = (content: string): boolean =>
+    /(?:do|does) not contain enough(?: supported)? information|insufficient information/i
+        .test(content)
+
 const parseEvent = (line: string): StreamEvent | null => {
     try {
         const value = JSON.parse(line) as StreamEvent
@@ -534,7 +538,10 @@ export default function KnowledgeChatPage() {
                                                             <div className="whitespace-pre-wrap text-sm leading-7 text-[#ddd3c5]">
                                                                 {withoutInlineCitations(message.content)}
                                                             </div>
-                                                            {message.citations && message.citations.length > 0 && (
+                                                            {message.citations
+                                                                && message.citations.length > 0
+                                                                && !isInsufficientAnswer(message.content)
+                                                                && (
                                                                 <div className="mt-4 rounded-2xl border border-[#2f2a23] bg-[#11100d] p-3">
                                                                     <div className="mb-2 flex items-center gap-2 px-1">
                                                                         <BookOpen size={13} className="text-[#e9cb7c]" />
@@ -557,7 +564,7 @@ export default function KnowledgeChatPage() {
                                                                         ))}
                                                                     </div>
                                                                 </div>
-                                                            )}
+                                                                )}
                                                         </>
                                                     )}
                                                 </div>
