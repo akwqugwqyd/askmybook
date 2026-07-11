@@ -59,12 +59,6 @@ interface StreamEvent {
     citations?: Citation[]
 }
 
-const suggestions = [
-    "Summarize the key ideas from the selected sources.",
-    "What conclusions are supported by these documents?",
-    "Compare the sources and identify disagreements.",
-]
-
 const withoutInlineCitations = (content: string): string =>
     content
         .replace(/\s*\([^()\n,]+,\s*page\s+[^)\n]+\)/gi, "")
@@ -495,19 +489,7 @@ export default function KnowledgeChatPage() {
                                                 <Library size={14} /> Fix document processing
                                             </Link>
                                         </div>
-                                    ) : (
-                                        <div className="mt-8 grid w-full gap-2 sm:grid-cols-3">
-                                            {suggestions.map((suggestion) => (
-                                                <button
-                                                    key={suggestion}
-                                                    onClick={() => void sendMessage(suggestion)}
-                                                    disabled={scope === "selected" && selectedIds.length === 0}
-                                                    className="rounded-2xl border border-[#312c25] bg-[#12110e] p-4 text-left text-xs leading-5 text-[#a99f92] transition hover:border-[#5d4e34] hover:bg-[#181510] disabled:cursor-not-allowed disabled:opacity-35">
-                                                    {suggestion}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    )}
+                                    ) : null}
                                 </div>
                             ) : (
                                 <div className="space-y-8 pb-4">
