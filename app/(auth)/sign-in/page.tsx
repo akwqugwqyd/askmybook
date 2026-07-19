@@ -11,7 +11,7 @@ export default function SignInPage() {
             Welcome to AskMyBook
           </h1>
           <p className="text-sm text-[#7A6E62]">
-            Sign in to upload and manage your books
+            Sign in to upload documents and ask grounded questions
           </p>
         </div>
         
