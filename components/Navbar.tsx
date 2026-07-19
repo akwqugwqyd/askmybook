@@ -1,13 +1,14 @@
 "use client"
-import Link from 'next/link'
-import { usePathname } from 'next/navigation'
-import { cn } from '@/lib/utils'
-import { SignInButton, UserButton, useUser } from '@clerk/nextjs'
 
-const navitems = [
-    { label: 'Knowledge base', href: '/dashboard' },
-    { label: 'Ask documents', href: '/chat' },
-    { label: 'Upload', href: '/books/new' },
+import Link from "next/link"
+import { usePathname } from "next/navigation"
+import { SignInButton, UserButton, useUser } from "@clerk/nextjs"
+import { cn } from "@/lib/utils"
+
+const navItems = [
+    { label: "Knowledge base", href: "/dashboard" },
+    { label: "Ask documents", href: "/chat" },
+    { label: "Upload", href: "/books/new" },
 ]
 
 const Navbar = () => {
@@ -15,47 +16,41 @@ const Navbar = () => {
     const { user, isLoaded } = useUser()
 
     return (
-        <header className="w-full border-b border-[#2A2520] bg-[#0D0C0A]">
-            <div className="wrapper navbar-height py-4 flex justify-between items-center px-6">
-                <Link href="/" className="text-[#E8C97A] text-lg font-medium tracking-wide">
-                     AskMyBook
+        <header className="sticky top-0 z-40 w-full border-b border-[#2a2520] bg-[#0d0c0a]/95 backdrop-blur">
+            <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-4 px-4 py-3 sm:px-6">
+                <Link href="/" className="shrink-0 text-base font-semibold tracking-wide text-[#e8c97a] sm:text-lg">
+                    AskMyBook
                 </Link>
 
-                <nav className="flex gap-7 items-center">
-                    {navitems.map(({ label, href }) => {
-                        const isActive = pathName === href ||
-                            (href !== '/' && pathName?.startsWith(href))
+                <nav className="flex min-w-0 items-center gap-2 sm:gap-5">
+                    <div className="hidden items-center gap-1 rounded-full border border-[#29241e] bg-[#12100e] p-1 md:flex">
+                        {navItems.map(({ label, href }) => {
+                            const isActive = pathName === href || (href !== "/" && pathName?.startsWith(href))
 
-                        return (
-                            <Link
-                                href={href}
-                                key={label}
-                                className={cn(
-                                    'text-sm transition-all duration-200',
-                                    isActive
-                                        ? 'text-[#E8C97A] border-b border-[#E8C97A] pb-0.5'
-                                        : 'text-[#7A6E62] hover:text-[#D4C5A9]'
-                                )}>
-                                {label}
-                            </Link>
-                        )
-                    })}
-
-                    <div className="flex gap-4 items-center">
-                        {isLoaded && !user && (
-                            <SignInButton mode="modal">
-                                <button className="px-4 py-2 rounded-lg bg-[#E8C97A] text-[#0D0C0A]
-                                    text-sm font-medium hover:bg-[#D4B560] transition-colors duration-200">
-                                    Sign In
-                                </button>
-                            </SignInButton>
-                        )}
-                        {isLoaded && user && (
-                            <div className="flex items-center gap-3">
-                                <UserButton />
-                            </div>
-                        )}
+                            return (
+                                <Link
+                                    href={href}
+                                    key={label}
+                                    className={cn(
+                                        "rounded-full px-3 py-1.5 text-xs transition",
+                                        isActive
+                                            ? "bg-[#2a2113] text-[#e8c97a]"
+                                            : "text-[#8b8176] hover:bg-[#1b1814] hover:text-[#d4c5a9]",
+                                    )}>
+                                    {label}
+                                </Link>
+                            )
+                        })}
                     </div>
+
+                    {isLoaded && !user && (
+                        <SignInButton mode="modal">
+                            <button className="rounded-xl bg-[#e8c97a] px-4 py-2 text-sm font-semibold text-[#0d0c0a] transition hover:bg-[#d4b560]">
+                                Sign in
+                            </button>
+                        </SignInButton>
+                    )}
+                    {isLoaded && user && <UserButton />}
                 </nav>
             </div>
         </header>
@@ -63,4 +58,3 @@ const Navbar = () => {
 }
 
 export default Navbar
-

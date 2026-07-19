@@ -4,7 +4,7 @@ import "./globals.css"
 import Navbar from "@/components/Navbar"
 
 export const metadata: Metadata = {
-  title: "AskMyBook — Grounded answers from your documents",
+  title: "AskMyBook - Grounded answers from your documents",
   description: "Build a private knowledge base and ask citation-backed questions across your PDFs.",
 }
 

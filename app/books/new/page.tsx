@@ -21,12 +21,47 @@ interface UploadIntent {
     error?: string
 }
 
+interface CloudinaryUploadResult {
+    public_id?: string
+    resource_type?: string
+    type?: string
+    secure_url?: string
+    error?: {
+        message?: string
+    }
+}
+
+interface ApiResult {
+    error?: string
+    book?: {
+        _id: string
+        processingStatus?: UploadState
+        processingError?: {
+            message?: string
+        }
+    }
+}
+
 const titleFromFile = (name: string) =>
     name.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim()
 
 const hasPdfSignature = async (file: File): Promise<boolean> => {
     const bytes = new Uint8Array(await file.slice(0, 5).arrayBuffer())
     return new TextDecoder("ascii").decode(bytes) === "%PDF-"
+}
+
+const readJsonResponse = async <T,>(response: Response, fallbackError: string): Promise<T> => {
+    const contentType = response.headers.get("content-type") || ""
+    if (contentType.includes("application/json")) {
+        return response.json() as Promise<T>
+    }
+
+    const text = (await response.text())
+        .replace(/<[^>]*>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+
+    throw new Error(text ? `${fallbackError} (${text.slice(0, 140)})` : fallbackError)
 }
 
 export default function NewDocumentsPage() {
@@ -80,7 +115,10 @@ export default function NewDocumentsPage() {
                         contentType: item.file.type || "application/pdf",
                     }),
                 })
-                const intent = await intentResponse.json() as UploadIntent
+                const intent = await readJsonResponse<UploadIntent>(
+                    intentResponse,
+                    "Upload could not be authorized. Check the server upload configuration.",
+                )
                 if (!intentResponse.ok) {
                     throw new Error(intent.error || "Upload could not be authorized.")
                 }
@@ -94,7 +132,10 @@ export default function NewDocumentsPage() {
                     method: "POST",
                     body: formData,
                 })
-                const upload = await uploadResponse.json()
+                const upload = await readJsonResponse<CloudinaryUploadResult>(
+                    uploadResponse,
+                    "Cloudinary upload failed. Check Cloudinary credentials and signed upload settings.",
+                )
                 if (!uploadResponse.ok) {
                     throw new Error(upload.error?.message || "Cloudinary upload failed.")
                 }
@@ -118,15 +159,22 @@ export default function NewDocumentsPage() {
                         fileSize: item.file.size,
                     }),
                 })
-                const created = await createResponse.json()
+                const created = await readJsonResponse<ApiResult>(
+                    createResponse,
+                    "Document record could not be created.",
+                )
                 if (!createResponse.ok) throw new Error(created.error || "Document record could not be created.")
+                if (!created.book?._id) throw new Error("Document record could not be created.")
                 documentId = created.book._id
                 update(item.id, { documentId })
             }
 
             update(item.id, { state: "processing" })
             const processResponse = await fetch(`/api/books/${documentId}/process`, { method: "POST" })
-            const processed = await processResponse.json()
+            const processed = await readJsonResponse<ApiResult>(
+                processResponse,
+                "Document processing failed.",
+            )
             if (!processResponse.ok) throw new Error(processed.error || "Document processing failed.")
             if (processed.book?.processingStatus === "failed") {
                 throw new Error(processed.book.processingError?.message || "Document processing failed.")
