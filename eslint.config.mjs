@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Local Python environments can be huge and should never be linted.
+    "venv/**",
+    "env/**",
+    "ENV/**",
+    ".venv/**",
   ]),
 ]);
 

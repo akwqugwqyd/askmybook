@@ -12,7 +12,6 @@ import {
     MessageSquare,
     PanelLeft,
     Plus,
-    Search,
     Sparkles,
     Trash2,
     X,
@@ -392,19 +391,18 @@ export default function KnowledgeChatPage() {
                 </aside>
 
                 <section className="flex min-h-0 min-w-0 flex-col">
-                    <header className="border-b border-[#292620] bg-[#0c0b0a]/95 px-4 py-3 backdrop-blur sm:px-6">
+                    <header className="bg-[#0c0b0a]/95 px-4 py-3 backdrop-blur sm:px-6">
                         <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
                             <div className="flex min-w-0 items-center gap-3">
                                 <button onClick={() => setSidebarOpen(true)} className="rounded-lg p-2 text-[#aaa094] hover:bg-[#1a1814] lg:hidden">
                                     <PanelLeft size={18} />
                                 </button>
-                                <div className="min-w-0">
+                                <div className="min-w-0 lg:hidden">
                                     <h1 className="truncate text-sm font-semibold text-[#f3ebdf]">
                                         {conversationId
                                             ? conversations.find((conversation) => conversation._id === conversationId)?.title || "Document conversation"
-                                            : "New grounded conversation"}
+                                            : "Ask documents"}
                                     </h1>
-                                    <p className="mt-0.5 truncate text-[11px] text-[#756d63]">Answers use only the sources in this conversation.</p>
                                 </div>
                             </div>
 
@@ -470,7 +468,7 @@ export default function KnowledgeChatPage() {
 
                     <div
                         ref={messagesRef}
-                        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-6 [scrollbar-gutter:stable] sm:px-6">
+                        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-6 pb-12 [scrollbar-gutter:stable] sm:px-6">
                         <div className="mx-auto max-w-4xl">
                             {messages.length === 0 ? (
                                 <div className="mx-auto flex min-h-[55vh] max-w-2xl flex-col items-center justify-center text-center">
@@ -559,7 +557,7 @@ export default function KnowledgeChatPage() {
                         </div>
                     </div>
 
-                    <footer className="border-t border-[#292620] bg-[#0c0b09]/95 px-4 py-2.5 backdrop-blur sm:px-6">
+                    <footer className="bg-[#0c0b09]/95 px-4 pb-6 pt-4 backdrop-blur sm:px-6">
                         <div className="mx-auto max-w-3xl">
                             {error && (
                                 <div className="mb-2 flex items-center justify-between rounded-xl border border-[#5a302d] bg-[#251412] px-3 py-2 text-xs text-[#e59a91]">
@@ -604,9 +602,6 @@ export default function KnowledgeChatPage() {
                                     {sending ? <LoaderCircle size={15} className="animate-spin" /> : <ArrowUp size={16} />}
                                 </button>
                             </div>
-                            <p className="mt-2 flex items-center justify-center gap-1.5 text-[10px] text-[#5f5951]">
-                                <Search size={10} /> Grounded search · verify important claims in the cited page
-                            </p>
                         </div>
                     </footer>
                 </section>

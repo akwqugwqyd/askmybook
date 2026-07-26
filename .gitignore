@@ -33,7 +33,6 @@ yarn-error.log*
 # environment files (keep only sanitized templates)
 .env*
 !.env.example
-!.env.production.example
 
 # local package/provider credentials
 .npmrc
@@ -48,6 +47,31 @@ service-account*.json
 
 node_modules
 .next
+
+# Python virtual environments
+venv/
+env/
+ENV/
+.venv
+.Python
+*.pyc
+__pycache__/
+*.egg-info/
+.pytest_cache/
+
+# Local observability data (generated at runtime, not committed)
+scripts/logs/traces/*.json
+scripts/evals/traces.json
+scripts/evals/results/*.json
+scripts/.phoenix/
+phoenix_config.json
+traces.json
+trace_analysis.json
+
+# Keep template files but ignore results
+!scripts/evals/golden_dataset.json
+!scripts/evals/.gitkeep
+!scripts/logs/.gitkeep
 
 # vercel
 .vercel
