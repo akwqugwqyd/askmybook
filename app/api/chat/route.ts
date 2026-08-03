@@ -6,6 +6,7 @@ import { logger } from "@/lib/logger"
 import { streamAgenticRag, type AgenticRagGraphUpdate } from "@/lib/agentic-rag"
 import dbConnect from "@/database/mongoose"
 import Book from "@/database/models/book.model"
+import Chunk from "@/database/models/chunk.model"
 import ChatMessage from "@/database/models/chat-message.model"
 import Conversation, { type ConversationScope } from "@/database/models/conversation.model"
 import { answerCacheKey, getCachedAnswer, setCachedAnswer } from "@/lib/rag-cache"
@@ -30,6 +31,55 @@ type ChatStreamEvent =
 
 const encodeEvent = (event: ChatStreamEvent): Uint8Array =>
     new TextEncoder().encode(`${JSON.stringify(event)}\n`)
+
+const directIntentReply = (message: string): string | null => {
+    const normalized = message
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s'?]/gu, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+
+    if (!normalized) return null
+
+    const isShort = normalized.split(" ").length <= 8
+    if (isShort && /^(hi|hii|hello|hey|yo|sup|good morning|good afternoon|good evening)( there)?$/.test(normalized)) {
+        return "Hello. Ask me a question about your uploaded documents, and I will answer with supporting citations when the documents contain the evidence."
+    }
+
+    if (isShort && /^(thanks|thank you|thx|ty|appreciate it|nice|great|ok|okay)$/.test(normalized)) {
+        return "You are welcome. Send me the next document question whenever you are ready."
+    }
+
+    if (isShort && /^(bye|goodbye|see you|see ya|later)$/.test(normalized)) {
+        return "Goodbye. Your conversations and uploaded documents will be here when you come back."
+    }
+
+    if (/^(what can you do|what do you do|help|how does this work|how can you help)( me)?\??$/.test(normalized)) {
+        return "I can search your uploaded documents, answer questions grounded in their contents, compare sources, summarize selected files, and show citations for the supporting pages."
+    }
+
+    return null
+}
+
+const isDocumentOverviewIntent = (message: string): boolean => {
+    const normalized = message
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s'?]/gu, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+
+    return /^(what is|what's|tell me about|summari[sz]e|explain|describe)\s+(this|the|these|selected|uploaded)?\s*(document|documents|pdf|pdfs|file|files)\s*(about)?$/.test(normalized)
+        || /^(what is|what's)\s+(this|the|these|selected|uploaded)\s*(about)$/.test(normalized)
+}
+
+const sentenceFromText = (text: string): string =>
+    text
+        .replace(/\s+/g, " ")
+        .trim()
+        .split(/(?<=[.!?])\s+/)
+        .find((sentence) => sentence.length >= 50)
+        ?.slice(0, 320)
+        || text.replace(/\s+/g, " ").trim().slice(0, 320)
 
 export async function GET(req: NextRequest) {
     try {
@@ -90,6 +140,55 @@ export async function POST(req: NextRequest) {
             }
         }
 
+        const directReply = directIntentReply(message)
+        if (directReply) {
+            const requestStatus = await getUserRequestStatus(userId)
+            if (!conversation) {
+                conversation = await Conversation.create({
+                    userId,
+                    title: message.slice(0, 80),
+                    scope,
+                    documentIds: scope === "all" ? [] : documentIds,
+                    lastMessageAt: new Date(),
+                })
+            }
+            const conversationId = String(conversation._id)
+            await Promise.all([
+                ChatMessage.create({
+                    userId,
+                    conversationId,
+                    role: "user",
+                    content: message,
+                    citations: [],
+                }),
+                ChatMessage.create({
+                    userId,
+                    conversationId,
+                    role: "assistant",
+                    content: directReply,
+                    citations: [],
+                    status: "direct_intent",
+                }),
+                Conversation.updateOne({ _id: conversationId, userId }, { lastMessageAt: new Date() }),
+            ])
+
+            return new Response(`${JSON.stringify({
+                type: "final",
+                reply: directReply,
+                requestStatus,
+                conversationId,
+                citations: [],
+            } satisfies ChatStreamEvent)}\n`, {
+                headers: {
+                    "Content-Type": "application/x-ndjson; charset=utf-8",
+                    "Cache-Control": "no-cache, no-transform",
+                    Connection: "keep-alive",
+                    "X-Content-Type-Options": "nosniff",
+                    "X-Trace-Id": traceId,
+                },
+            })
+        }
+
         const documentQuery = scope === "all"
             ? {
                 userId,
@@ -116,6 +215,90 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: "No processed documents are available to search." }, { status: 409 })
         }
         documentIds = ownedDocuments.map((document) => String(document._id))
+
+        if (isDocumentOverviewIntent(message)) {
+            const requestStatus = await getUserRequestStatus(userId)
+            if (!conversation) {
+                conversation = await Conversation.create({
+                    userId,
+                    title: message.slice(0, 80),
+                    scope,
+                    documentIds: scope === "all" ? [] : documentIds,
+                    lastMessageAt: new Date(),
+                })
+            }
+            const conversationId = String(conversation._id)
+            const chunkGroups = await Promise.all(ownedDocuments.map(async (document) => {
+                const id = String(document._id)
+                const chunks = await Chunk.find({ userId, documentId: id })
+                    .sort({ chunkIndex: 1 })
+                    .limit(3)
+                    .select("content pageNumber documentName documentId chunkIndex")
+                    .lean()
+                return { document, chunks }
+            }))
+
+            const sections = chunkGroups.map(({ document, chunks }) => {
+                const title = String(document.title || document.documentName || "Selected document")
+                if (chunks.length === 0) return `${title}: I could not find extracted text chunks for this document.`
+                const points = chunks
+                    .map((chunk) => sentenceFromText(chunk.content))
+                    .filter(Boolean)
+                    .slice(0, 3)
+                return [
+                    `${title}:`,
+                    ...points.map((point) => `- ${point}`),
+                ].join("\n")
+            })
+            const overviewReply = ownedDocuments.length === 1
+                ? `This document appears to be about:\n\n${sections[0]}`
+                : `Here is what the selected documents appear to be about:\n\n${sections.join("\n\n")}`
+            const overviewCitations = chunkGroups.flatMap(({ document, chunks }) =>
+                chunks.slice(0, 2).map((chunk) => ({
+                    document: String(document.documentName || document.title || "Selected document"),
+                    documentId: String(document._id),
+                    page: chunk.pageNumber ? String(chunk.pageNumber) : "unknown",
+                    chunkId: String(chunk._id),
+                    excerpt: sentenceFromText(chunk.content),
+                    relevance: 1,
+                })),
+            )
+
+            await Promise.all([
+                ChatMessage.create({
+                    userId,
+                    conversationId,
+                    role: "user",
+                    content: message,
+                    citations: [],
+                }),
+                ChatMessage.create({
+                    userId,
+                    conversationId,
+                    role: "assistant",
+                    content: overviewReply,
+                    citations: overviewCitations,
+                    status: "document_overview",
+                }),
+                Conversation.updateOne({ _id: conversationId, userId }, { lastMessageAt: new Date() }),
+            ])
+
+            return new Response(`${JSON.stringify({
+                type: "final",
+                reply: overviewReply,
+                requestStatus,
+                conversationId,
+                citations: overviewCitations,
+            } satisfies ChatStreamEvent)}\n`, {
+                headers: {
+                    "Content-Type": "application/x-ndjson; charset=utf-8",
+                    "Cache-Control": "no-cache, no-transform",
+                    Connection: "keep-alive",
+                    "X-Content-Type-Options": "nosniff",
+                    "X-Trace-Id": traceId,
+                },
+            })
+        }
 
         const cacheKey = answerCacheKey(
             message,
@@ -165,7 +348,7 @@ export async function POST(req: NextRequest) {
             Conversation.updateOne({ _id: conversationId, userId }, { lastMessageAt: new Date() }),
         ])
 
-        logger.info("[CHAT] Starting grounded retrieval", {
+        logger.info(`[CHAT] Starting grounded retrieval after ${Date.now() - startedAt}ms setup`, {
             userId,
             conversationId,
             scope,
@@ -193,6 +376,10 @@ export async function POST(req: NextRequest) {
                             conversationId,
                             citations: cachedAnswer.citations,
                         }))
+                        logger.info(`[CHAT] Cached answer ready in ${Date.now() - startedAt}ms`, {
+                            traceId,
+                            conversationId,
+                        })
                         const outputTokens = estimateTokens(finalReply)
                         await recordTrace({
                             traceId,
@@ -259,6 +446,11 @@ export async function POST(req: NextRequest) {
                             conversationId,
                             citations: update.citations,
                         }))
+                        logger.info(`[CHAT] Final answer ready in ${Date.now() - startedAt}ms`, {
+                            traceId,
+                            conversationId,
+                            node: update.node,
+                        })
                         const citations = update.citations ?? []
                         const inputTokens = update.tokenUsage?.inputTokens
                             || estimateTokens(`${conversationContext}\n${message}`)

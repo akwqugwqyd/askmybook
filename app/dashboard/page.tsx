@@ -1,8 +1,9 @@
 "use client"
 
 import Link from "next/link"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { AlertTriangle, Check, FileText, Library, LoaderCircle, MessageSquareText, RefreshCw, Trash2, Upload } from "lucide-react"
+import RecoveryPanel from "@/components/RecoveryPanel"
 
 type Status = "queued" | "processing" | "ready" | "failed"
 interface DashboardDocument {
@@ -30,10 +31,35 @@ interface DashboardData {
 }
 
 const statusStyle: Record<Status, string> = {
-    ready: "border-[#34452d] bg-[#182017] text-[#9fbd8e]",
-    queued: "border-[#51452d] bg-[#211c13] text-[#c7a967]",
-    processing: "border-[#51452d] bg-[#211c13] text-[#c7a967]",
-    failed: "border-[#55302d] bg-[#241513] text-[#d58c84]",
+    ready: "border-[#8ff5d3]/30 bg-[#8ff5d3]/10 text-[#a7ffe1]",
+    queued: "border-[#91d9ff]/30 bg-[#91d9ff]/10 text-[#b8e9ff]",
+    processing: "border-[#91d9ff]/30 bg-[#91d9ff]/10 text-[#b8e9ff]",
+    failed: "border-[#ffad9a]/30 bg-[#ff927a]/10 text-[#ffb5a4]",
+}
+
+const friendlyRequestError = (error: unknown, fallback: string): string => {
+    const message = error instanceof Error ? error.message : ""
+    if (/failed to fetch|networkerror|load failed/i.test(message)) return "We could not reach the service. Check your connection and try again."
+    if (/unexpected token|json/i.test(message)) return fallback
+    return message || fallback
+}
+
+const withoutDocument = (current: DashboardData, documentId: string): DashboardData => {
+    const document = current.documents.find((item) => item._id === documentId)
+    if (!document) return current
+
+    const stats = { ...current.stats, totalBooks: Math.max(0, current.stats.totalBooks - 1) }
+    if (document.processingStatus === "ready") stats.readyBooks = Math.max(0, stats.readyBooks - 1)
+    if (document.processingStatus === "failed") stats.failedBooks = Math.max(0, stats.failedBooks - 1)
+    if (document.processingStatus === "queued" || document.processingStatus === "processing") {
+        stats.processingBooks = Math.max(0, stats.processingBooks - 1)
+    }
+
+    return {
+        ...current,
+        stats,
+        documents: current.documents.filter((item) => item._id !== documentId),
+    }
 }
 
 export default function DashboardPage() {
@@ -42,19 +68,25 @@ export default function DashboardPage() {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState("")
     const [retryingIds, setRetryingIds] = useState<string[]>([])
+    const deletingIds = useRef(new Set<string>())
     const readyIds = useMemo(
         () => data?.documents.filter((document) => document.processingStatus === "ready").map((document) => document._id) || [],
         [data],
     )
 
     const load = async () => {
+        setError("")
         try {
             const response = await fetch("/api/dashboard", { cache: "no-store" })
-            const result = await response.json() as DashboardData
+            const result = await response.json().catch(() => ({})) as DashboardData
             if (!response.ok) throw new Error(result.error || "Dashboard could not be loaded.")
-            setData(result)
+            const visibleResult = [...deletingIds.current].reduce(
+                (current, documentId) => withoutDocument(current, documentId),
+                result,
+            )
+            setData(visibleResult)
         } catch (loadError) {
-            setError(loadError instanceof Error ? loadError.message : "Dashboard could not be loaded.")
+            setError(friendlyRequestError(loadError, "Your knowledge base could not be loaded. Please try again."))
         } finally {
             setLoading(false)
         }
@@ -86,11 +118,15 @@ export default function DashboardPage() {
                     : document),
         } : current)
         try {
-            const response = await fetch(`/api/books/${id}/process`, { method: "POST" })
-            const result = await response.json()
+            const response = await fetch("/api/process-document", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ documentId: id }),
+            })
+            const result = await response.json().catch(() => ({})) as { error?: string }
             if (!response.ok) setError(result.error || "Processing could not be restarted.")
-        } catch {
-            setError("Processing could not be restarted. Check your connection and retry.")
+        } catch (retryError) {
+            setError(friendlyRequestError(retryError, "Processing could not be restarted. Please try again."))
         } finally {
             setRetryingIds((current) => current.filter((value) => value !== id))
             await load()
@@ -99,38 +135,57 @@ export default function DashboardPage() {
 
     const remove = async (document: DashboardDocument) => {
         if (!window.confirm(`Delete “${document.title}” and its vectors, chunks, and scoped chats?`)) return
-        const response = await fetch(`/api/books/${document._id}`, { method: "DELETE" })
-        const result = await response.json()
-        if (!response.ok) {
-            setError(result.error || "Document could not be deleted.")
-            return
-        }
+        setError("")
+        deletingIds.current.add(document._id)
         setSelected((current) => current.filter((id) => id !== document._id))
-        await load()
+        setData((current) => current ? withoutDocument(current, document._id) : current)
+
+        try {
+            const response = await fetch(`/api/books/${document._id}`, { method: "DELETE" })
+            const result = await response.json().catch(() => ({})) as { error?: string }
+            if (!response.ok) throw new Error(result.error || "Document could not be deleted.")
+            deletingIds.current.delete(document._id)
+            void load()
+        } catch (deleteError) {
+            deletingIds.current.delete(document._id)
+            const message = friendlyRequestError(deleteError, "Document could not be deleted. Please try again.")
+            await load()
+            setError(message)
+        }
     }
 
-    if (loading) return <main className="min-h-[70vh] grid place-items-center text-[#81766a]">Loading your knowledge base…</main>
+    if (loading) return (
+        <main className="app-frame grid min-h-[70vh] place-items-center px-5">
+            <div className="flex items-center gap-3 text-sm text-[#9bb7c9]"><LoaderCircle size={17} className="animate-spin text-[#8ff5d3]" /> Loading your knowledge base</div>
+        </main>
+    )
+
+    if (!data && error) return (
+        <main className="app-frame grid min-h-[70vh] place-items-center px-5 py-10">
+            <RecoveryPanel title="Your knowledge base is taking a moment" message={error} onRetry={() => void load()} />
+        </main>
+    )
 
     return (
-        <main className="min-h-screen bg-[#0d0c0a] px-4 py-10 sm:px-7">
+        <main className="app-frame min-h-screen px-4 py-10 sm:px-7">
             <div className="mx-auto max-w-6xl">
                 <header className="flex flex-wrap items-end justify-between gap-5">
                     <div>
-                        <p className="text-[11px] uppercase tracking-[0.2em] text-[#806f53]">Private workspace</p>
-                        <h1 className="mt-2 font-[var(--font-ibm-plex-serif)] text-3xl text-[#f0e6d0]">Your knowledge base</h1>
-                        <p className="mt-2 text-sm text-[#7d7267]">Manage sources, monitor indexing, and choose what the assistant can search.</p>
+                        <p className="eyebrow">Workspace</p>
+                        <h1 className="font-display mt-2 text-4xl tracking-[-0.04em] text-[#effaff]">Knowledge base</h1>
+                        <p className="mt-2 text-sm text-[#9bb7c9]">Manage documents, follow indexing, and choose what chat can search.</p>
                     </div>
                     <div className="flex gap-2">
-                        <Link href="/chat?scope=all" className="flex items-center gap-2 rounded-xl border border-[#3a332b] px-4 py-2.5 text-sm text-[#d7c9b4] hover:bg-[#171410]">
+                        <Link href="/chat?scope=all" className="button-secondary flex items-center gap-2 px-4 py-2.5 text-sm">
                             <Library size={15} /> Ask everything
                         </Link>
-                        <Link href="/books/new" className="flex items-center gap-2 rounded-xl bg-[#e8c97a] px-4 py-2.5 text-sm font-semibold text-[#17130e]">
+                        <Link href="/books/new" className="button-primary flex items-center gap-2 px-4 py-2.5 text-sm">
                             <Upload size={15} /> Upload
                         </Link>
                     </div>
                 </header>
 
-                {error && <div className="mt-6 rounded-xl border border-[#55302d] bg-[#241513] px-4 py-3 text-sm text-[#d58c84]">{error}</div>}
+                {error && <div className="mt-6"><RecoveryPanel compact message={error} onRetry={() => void load()} /></div>}
 
                 {data && (
                     <>
@@ -144,31 +199,31 @@ export default function DashboardPage() {
                             ].map(([label, value]) => (
                                 <div key={label} className={`rounded-xl border p-4 ${
                                     label === "Failed" && Number(value) > 0
-                                        ? "border-[#4f2d29] bg-[#1b1110]"
-                                        : "border-[#2c2721] bg-[#141210]"
+                                        ? "border-[#ffad9a]/25 bg-[#ff927a]/10"
+                                        : "shell-card"
                                 }`}>
-                                    <p className="text-xs text-[#756a60]">{label}</p>
-                                    <p className="mt-2 text-2xl text-[#eee2cd]">{value}</p>
+                                    <p className="text-xs text-[#91adbf]">{label}</p>
+                                    <p className="mt-2 text-2xl font-semibold text-[#effaff]">{value}</p>
                                 </div>
                             ))}
                         </section>
 
-                        <section className="mt-8 overflow-hidden rounded-2xl border border-[#2c2721] bg-[#12100e]">
-                            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#2c2721] px-4 py-3.5 sm:px-5">
+                        <section className="shell-card mt-8 overflow-hidden rounded-2xl">
+                            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#b7e6ff]/12 px-4 py-3.5 sm:px-5">
                                 <div className="flex items-center gap-3">
                                     <button
                                         onClick={() => setSelected(selected.length === readyIds.length ? [] : readyIds)}
-                                        className="grid h-5 w-5 place-items-center rounded border border-[#4a4035] text-[#e8c97a]">
+                                        className="grid h-5 w-5 place-items-center rounded border border-[#8fc7e1]/45 text-[#8ff5d3]">
                                         {readyIds.length > 0 && selected.length === readyIds.length && <Check size={13} />}
                                     </button>
-                                    <p className="text-sm text-[#bdb09d]">
+                                    <p className="text-sm text-[#c9e1ef]">
                                         {selected.length ? `${selected.length} selected` : `${data.documents.length} documents`}
                                     </p>
                                 </div>
                                 {selected.length > 0 && (
                                     <Link
                                         href={`/chat?documents=${selected.join(",")}`}
-                                        className="flex items-center gap-2 rounded-lg bg-[#e8c97a] px-3.5 py-2 text-xs font-semibold text-[#17130e]">
+                                        className="button-primary flex items-center gap-2 px-3.5 py-2 text-xs">
                                         <MessageSquareText size={14} /> Ask selected
                                     </Link>
                                 )}
@@ -176,12 +231,12 @@ export default function DashboardPage() {
 
                             {data.documents.length === 0 ? (
                                 <div className="px-6 py-16 text-center">
-                                    <FileText size={28} className="mx-auto text-[#4e463e]" />
-                                    <p className="mt-4 text-sm text-[#b8aa97]">No documents yet</p>
-                                    <p className="mt-1 text-xs text-[#6e655c]">Upload PDFs to build your private, searchable knowledge base.</p>
+                                    <FileText size={28} className="mx-auto text-[#8ff5d3]" />
+                                    <p className="mt-4 text-sm font-semibold text-[#dff2fb]">No sources yet</p>
+                                    <p className="mt-1 text-xs text-[#8faabd]">Upload documents, data files, or images to make your knowledge base searchable.</p>
                                 </div>
                             ) : (
-                                <div className="divide-y divide-[#27221d]">
+                                <div className="divide-y divide-[#b7e6ff]/10">
                                     {data.documents.map((document) => {
                                         const canSelect = document.processingStatus === "ready"
                                         return (
@@ -190,28 +245,28 @@ export default function DashboardPage() {
                                                     disabled={!canSelect}
                                                     onClick={() => toggle(document._id)}
                                                     aria-label={`Select ${document.title}`}
-                                                    className="grid h-5 w-5 place-items-center rounded border border-[#4a4035] text-[#e8c97a] disabled:opacity-25">
+                                                    className="grid h-5 w-5 place-items-center rounded border border-[#8fc7e1]/45 text-[#8ff5d3] disabled:opacity-25">
                                                     {selected.includes(document._id) && <Check size={13} />}
                                                 </button>
                                                 <div className="min-w-0">
-                                                    <Link href={`/books/${document._id}`} className="truncate text-sm font-medium text-[#e4d7c2] hover:text-[#e8c97a]">
+                                                    <Link href={`/books/${document._id}`} className="truncate text-sm font-semibold text-[#e8f7ff] hover:text-[#a7ffe1]">
                                                         {document.title}
                                                     </Link>
-                                                    <p className="mt-1 truncate text-xs text-[#6f665d]">
+                                                    <p className="mt-1 truncate text-xs text-[#8aa8ba]">
                                                         {document.author} · {document.pageCount || 0} pages · {document.chunkCount || 0} chunks
                                                     </p>
                                                     {document.processingStatus === "processing" && document.processingStage && (
-                                                        <p className="mt-1 text-[10px] capitalize text-[#c7a967]">
+                                                        <p className="mt-1 text-[10px] capitalize text-[#a7ffe1]">
                                                             {document.processingStage} stage
                                                         </p>
                                                     )}
                                                     {document.processingError?.message && (
-                                                        <div className="mt-2 flex items-start gap-1.5 text-xs text-[#cf7f76]">
+                                                        <div className="mt-2 flex items-start gap-1.5 text-xs text-[#ffb5a4]">
                                                             <AlertTriangle size={12} className="mt-0.5 shrink-0" />
                                                             <span>
                                                                 {document.processingError.message}
                                                                 {document.processingError.code && (
-                                                                    <span className="ml-1 text-[9px] uppercase tracking-wider text-[#7e5752]">
+                                                                    <span className="ml-1 text-[9px] uppercase tracking-wider text-[#d58e80]">
                                                                         {document.processingError.code}
                                                                     </span>
                                                                 )}
@@ -229,14 +284,14 @@ export default function DashboardPage() {
                                                             disabled={retryingIds.includes(document._id)}
                                                             aria-label="Retry processing"
                                                             title="Retry indexing"
-                                                            className="flex items-center gap-1.5 rounded-lg border border-[#40382e] px-2.5 py-1.5 text-[10px] text-[#c5b9a9] hover:bg-[#211d18] disabled:opacity-50">
+                                                            className="button-secondary flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] disabled:opacity-50">
                                                             {retryingIds.includes(document._id)
                                                                 ? <LoaderCircle size={13} className="animate-spin" />
                                                                 : <RefreshCw size={13} />}
                                                             Retry
                                                         </button>
                                                     )}
-                                                    <button onClick={() => void remove(document)} aria-label="Delete document" className="rounded-lg p-2 text-[#91615d] hover:bg-[#241513]">
+                                                    <button onClick={() => void remove(document)} aria-label="Delete document" className="rounded-lg p-2 text-[#ffad9a] hover:bg-[#ff927a]/10">
                                                         <Trash2 size={15} />
                                                     </button>
                                                 </div>

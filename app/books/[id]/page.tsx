@@ -1,32 +1,48 @@
 "use client"
-import { useCallback, useEffect, useState } from 'react'
-import { useParams, useRouter } from 'next/navigation'
-import Image from 'next/image'
-import Link from 'next/link'
-import { IBook } from '@/database/models/book.model'
-import { CURRENT_EMBEDDING_VERSION, CURRENT_INDEXING_VERSION } from '@/lib/ai-config'
 
-const BookPage = () => {
+import { useCallback, useEffect, useState } from "react"
+import { useParams, useRouter } from "next/navigation"
+import Image from "next/image"
+import Link from "next/link"
+import { ArrowLeft, FileText, LoaderCircle, Trash2 } from "lucide-react"
+import type { IBook } from "@/database/models/book.model"
+import { CURRENT_EMBEDDING_VERSION, CURRENT_INDEXING_VERSION } from "@/lib/ai-config"
+import RecoveryPanel from "@/components/RecoveryPanel"
+
+interface BookResponse {
+    success?: boolean
+    book?: IBook
+    error?: string
+    message?: string
+}
+
+export default function BookPage() {
     const { id } = useParams()
     const router = useRouter()
     const [book, setBook] = useState<IBook | null>(null)
     const [loading, setLoading] = useState(true)
     const [deleting, setDeleting] = useState(false)
     const [processing, setProcessing] = useState(false)
-    const [processMessage, setProcessMessage] = useState('')
-    const isReady = (book?.processingStatus === 'ready' || !book?.processingStatus)
+    const [processMessage, setProcessMessage] = useState("")
+    const [error, setError] = useState("")
+    const documentId = Array.isArray(id) ? id[0] : id
+    const isReady = (book?.processingStatus === "ready" || !book?.processingStatus)
         && (book?.indexingVersion || 1) >= CURRENT_INDEXING_VERSION
         && (book?.embeddingVersion || 1) === CURRENT_EMBEDDING_VERSION
-    const documentId = Array.isArray(id) ? id[0] : id
+    const isPdf = book?.documentName?.toLowerCase().endsWith(".pdf")
 
     const fetchBook = useCallback(async () => {
         if (!documentId) return
+        setError("")
         try {
-            const res = await fetch(`/api/books/${documentId}`)
-            const data = await res.json()
-            if (data.success) setBook(data.book)
-        } catch (error) {
-            console.error(error)
+            const response = await fetch(`/api/books/${documentId}`)
+            const data = await response.json().catch(() => ({})) as BookResponse
+            if (!response.ok || !data.success || !data.book) {
+                throw new Error(data.error || "This document could not be loaded.")
+            }
+            setBook(data.book)
+        } catch (loadError) {
+            setError(loadError instanceof Error ? loadError.message : "This document could not be loaded.")
         } finally {
             setLoading(false)
         }
@@ -34,198 +50,128 @@ const BookPage = () => {
 
     const startProcessing = useCallback(async () => {
         if (!documentId || processing) return
+        setError("")
         setProcessing(true)
-        setProcessMessage('Processing this PDF now. Larger documents can take a little while.')
-
+        setProcessMessage("Processing this source now. Larger files can take a little while.")
         try {
-            const res = await fetch(`/api/books/${documentId}/process`, { method: 'POST' })
-            const data = await res.json()
-            if (data.success && data.book) {
-                setBook(data.book)
-                setProcessMessage(data.book.processingStatus === 'ready'
-                    ? 'Processing complete. Chat is ready.'
-                    : data.message || 'Processing is underway.')
-            } else {
-                setProcessMessage(data.error || 'Processing could not be started.')
-                await fetchBook()
+            const response = await fetch("/api/process-document", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ documentId }),
+            })
+            const data = await response.json().catch(() => ({})) as BookResponse
+            if (!response.ok || !data.success || !data.book) {
+                throw new Error(data.error || "Processing could not be started.")
             }
-        } catch {
-            setProcessMessage('Processing could not be started. Please try again.')
+            setBook(data.book)
+            setProcessMessage(data.book.processingStatus === "ready"
+                ? "Processing complete. Your source is ready to chat."
+                : data.message || "Processing is underway. You can leave this page and check back soon.")
+        } catch (processError) {
+            const message = processError instanceof Error ? processError.message : "Processing could not be started."
+            setError(message)
+            setProcessMessage(message)
             await fetchBook()
         } finally {
             setProcessing(false)
         }
     }, [documentId, fetchBook, processing])
 
-    useEffect(() => {
-        fetchBook()
-    }, [fetchBook])
+    useEffect(() => { void fetchBook() }, [fetchBook])
 
     useEffect(() => {
-        if (book?.processingStatus === 'queued') {
-            startProcessing()
-        }
+        if (book?.processingStatus === "queued") void startProcessing()
     }, [book?.processingStatus, startProcessing])
 
     useEffect(() => {
-        if (book?.processingStatus !== 'processing' || processing) return
-
-        const interval = window.setInterval(() => {
-            fetchBook()
-        }, 3000)
-
+        if (book?.processingStatus !== "processing" || processing) return
+        const interval = window.setInterval(() => void fetchBook(), 3_000)
         return () => window.clearInterval(interval)
     }, [book?.processingStatus, processing, fetchBook])
 
     const handleDelete = async () => {
-        if (!confirm('Delete this document, its vectors, and related conversations?')) return
+        if (!window.confirm("Delete this source, its index, and related conversations?")) return
+        setError("")
         setDeleting(true)
         try {
-            const res = await fetch(`/api/books/${documentId}`, { method: 'DELETE' })
-            const data = await res.json()
-            if (data.success) router.push('/')
-        } catch (error) {
-            console.error(error)
+            const response = await fetch(`/api/books/${documentId}`, { method: "DELETE" })
+            const data = await response.json().catch(() => ({})) as BookResponse
+            if (!response.ok || !data.success) throw new Error(data.error || "This source could not be deleted.")
+            router.push("/dashboard")
+        } catch (deleteError) {
+            setError(deleteError instanceof Error ? deleteError.message : "This source could not be deleted. Please retry.")
         } finally {
             setDeleting(false)
         }
     }
 
-    if (loading) return (
-        <main className="min-h-screen bg-[#0D0C0A] flex items-center justify-center">
-            <div className="flex flex-col items-center gap-3">
-                <div className="w-7 h-7 border border-[#E8C97A] border-t-transparent rounded-full animate-spin" />
-                <p className="text-xs text-[#5A5048]">Loading document...</p>
-            </div>
-        </main>
-    )
+    if (loading) {
+        return (
+            <main className="app-frame grid min-h-screen place-items-center">
+                <div className="flex items-center gap-3 text-sm text-[#9bb7c9]"><LoaderCircle size={17} className="animate-spin text-[#8ff5d3]" /> Loading source</div>
+            </main>
+        )
+    }
 
-    if (!book) return (
-        <main className="min-h-screen bg-[#0D0C0A] flex items-center justify-center">
-            <div className="flex flex-col items-center gap-3">
-                <p className="text-sm text-[#D4C5A9]">Document not found</p>
-                <Link href="/" className="text-xs text-[#E8C97A] hover:opacity-70">← Back to Library</Link>
-            </div>
-        </main>
-    )
+    if (error && !book) {
+        return (
+            <main className="app-frame grid min-h-screen place-items-center px-5 py-10">
+                <RecoveryPanel title="This source could not be opened" message={error} onRetry={() => void fetchBook()} backHref="/dashboard" backLabel="Knowledge base" />
+            </main>
+        )
+    }
+
+    if (!book) {
+        return (
+            <main className="app-frame grid min-h-screen place-items-center px-5">
+                <div className="text-center"><p className="text-sm text-[#d9effb]">Source not found.</p><Link href="/dashboard" className="mt-3 inline-flex text-xs font-semibold text-[#8ff5d3]">Return to knowledge base</Link></div>
+            </main>
+        )
+    }
 
     return (
-        <main className="min-h-screen bg-[#0D0C0A] px-6 py-10">
-            <div className="max-w-3xl mx-auto">
+        <main className="app-frame min-h-screen px-5 py-10 sm:px-7">
+            <div className="mx-auto max-w-3xl">
+                <Link href="/dashboard" className="mb-7 inline-flex items-center gap-2 text-xs font-semibold text-[#9bc2d8] hover:text-[#a7ffe1]"><ArrowLeft size={14} /> Knowledge base</Link>
+                {error && <div className="mb-5"><RecoveryPanel compact message={error} onRetry={() => { setError(""); void fetchBook() }} /></div>}
 
-                <Link href="/"
-                    className="inline-flex items-center gap-2 text-xs text-[#5A5048]
-                        hover:text-[#E8C97A] transition-colors duration-200 mb-8">
-                    ← Back to Library
-                </Link>
-
-                <div className="bg-[#141210] border border-[#2A2520] rounded-2xl overflow-hidden">
+                <section className="shell-card overflow-hidden rounded-[1.7rem]">
                     <div className="flex flex-col md:flex-row">
-
-                        {/* Cover */}
-                        <div className="w-full md:w-56 h-64 bg-[#1A1814] relative shrink-0">
-                            {book.coverImage ? (
-                                <Image src={book.coverImage} alt={book.title} fill className="object-cover" />
-                            ) : (
-                                <div className="w-full h-full flex items-center justify-center">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="56" height="56"
-                                        viewBox="0 0 24 24" fill="none" stroke="#3A3028"
-                                        strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-                                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-                                    </svg>
-                                </div>
-                            )}
+                        <div className="relative grid h-52 w-full shrink-0 place-items-center overflow-hidden bg-[#0a2639] md:h-auto md:w-56">
+                            <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_25%,rgba(143,245,211,.18),transparent_46%),radial-gradient(circle_at_76%_75%,rgba(255,146,122,.15),transparent_42%)]" />
+                            {book.coverImage ? <Image src={book.coverImage} alt={book.title} fill className="object-cover" /> : <FileText size={48} className="relative text-[#8ff5d3]" />}
                         </div>
 
-                        {/* Details */}
-                        <div className="flex flex-col gap-4 p-8 flex-1">
+                        <div className="flex flex-1 flex-col gap-4 p-6 sm:p-8">
                             <div>
-                                <h1 className="text-2xl font-medium text-[#F0E6D0] leading-tight mb-1">
-                                    {book.title}
-                                </h1>
-                                <p className="text-sm text-[#E8C97A]">by {book.author}</p>
+                                <p className="eyebrow">Document details</p>
+                                <h1 className="mt-2 text-2xl font-semibold leading-tight text-[#effaff]">{book.title}</h1>
+                                <p className="mt-1 text-sm text-[#8ff5d3]">{book.author}</p>
                             </div>
+                            <p className="text-xs text-[#8ba8ba]">Added {new Date(book.createdAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}</p>
 
-                            <p className="text-xs text-[#3A3028]">
-                                Added {new Date(book.createdAt).toLocaleDateString('en-US', {
-                                    year: 'numeric', month: 'long', day: 'numeric'
-                                })}
-                            </p>
-                            <div className="rounded-lg border border-[#2A2520] px-4 py-3">
-                                <p className="text-xs text-[#7A6E62] uppercase tracking-wider mb-1">
-                                    Processing Status
-                                </p>
-                                <p className={`text-sm ${
-                                    isReady ? 'text-[#7A8F5A]' : book.processingStatus === 'failed' ? 'text-[#B96A6A]' : 'text-[#B9A06A]'
-                                }`}>
-                                    {isReady ? 'Ready to chat' : book.processingStatus}
-                                </p>
-                                {book.processingError?.message && (
-                                    <p className="text-xs text-[#B96A6A] mt-2">{book.processingError.message}</p>
-                                )}
-                                {book.pageCount > 0 && (
-                                    <p className="text-xs text-[#5A5048] mt-2">
-                                        {book.pageCount} pages | {book.chunkCount} chunks indexed
-                                    </p>
-                                )}
-                                {processMessage && (
-                                    <p className="text-xs text-[#7A6E62] mt-2">{processMessage}</p>
-                                )}
-                                {(book.processingStatus === 'queued' || book.processingStatus === 'failed' || !isReady) && (
-                                    <button
-                                        onClick={startProcessing}
-                                        disabled={processing}
-                                        className="mt-3 px-3 py-2 rounded-lg bg-[#E8C97A] text-xs font-medium
-                                            text-[#0D0C0A] hover:bg-[#D4B560] transition-colors disabled:opacity-50">
-                                        {processing
-                                            ? 'Processing...'
-                                            : book.processingStatus === 'failed'
-                                                ? 'Retry Processing'
-                                                : 'Process Now'}
+                            <div className="rounded-xl border border-[#b7e6ff]/14 bg-[#071b2b]/55 px-4 py-3">
+                                <p className="eyebrow">Index status</p>
+                                <p className={`mt-2 text-sm font-semibold ${isReady ? "text-[#8ff5d3]" : book.processingStatus === "failed" ? "text-[#ffad9a]" : "text-[#b8e9ff]"}`}>{isReady ? "Ready to chat" : book.processingStatus}</p>
+                                {book.processingError?.message && <p className="mt-2 text-xs leading-5 text-[#ffad9a]">{book.processingError.message}</p>}
+                                {book.pageCount > 0 && <p className="mt-2 text-xs text-[#8ba8ba]">{book.pageCount} source sections · {book.chunkCount} chunks indexed</p>}
+                                {processMessage && <p className="mt-2 text-xs leading-5 text-[#a8c0d2]">{processMessage}</p>}
+                                {(book.processingStatus === "queued" || book.processingStatus === "failed" || !isReady) && (
+                                    <button onClick={() => void startProcessing()} disabled={processing} className="button-primary mt-3 px-3 py-2 text-xs">
+                                        {processing ? "Processing..." : book.processingStatus === "failed" ? "Retry processing" : "Process now"}
                                     </button>
                                 )}
                             </div>
 
-                            <div className="flex gap-3 mt-auto pt-4">
-                                <Link
-                                    href={`/books/${documentId}/preview`}
-                                    className="px-4 py-3 rounded-xl border border-[#3A3028] text-sm
-                                        text-[#D4C5A9] hover:bg-[#201C17] transition-colors text-center">
-                                    Preview PDF
-                                </Link>
-                                {isReady ? (
-                                    <Link
-                                        href={`/chat?documents=${documentId}`}
-                                        className="flex-1 py-3 rounded-xl bg-[#E8C97A] text-sm font-medium
-                                            text-[#0D0C0A] hover:bg-[#D4B560] transition-colors duration-200
-                                            text-center">
-                                        Start AI Chat
-                                    </Link>
-                                ) : (
-                                    <button
-                                        disabled
-                                        className="flex-1 py-3 rounded-xl bg-[#3A3028] text-sm font-medium
-                                            text-[#7A6E62] cursor-not-allowed">
-                                        Chat unavailable
-                                    </button>
-                                )}
-                                <button
-                                    onClick={handleDelete}
-                                    disabled={deleting}
-                                    className="px-5 py-3 rounded-xl border border-[#3A2828]
-                                        text-[#7A4040] hover:bg-[#2A1818] transition-colors duration-200
-                                        text-sm disabled:opacity-50">
-                                    {deleting ? '...' : 'Delete'}
-                                </button>
+                            <div className="mt-auto flex flex-wrap gap-3 pt-2">
+                                {isPdf && <Link href={`/books/${documentId}/preview`} className="button-secondary px-4 py-3 text-center text-sm">Preview PDF</Link>}
+                                {isReady ? <Link href={`/chat?documents=${documentId}`} className="button-primary flex-1 px-4 py-3 text-center text-sm">Ask this source</Link> : <button disabled className="flex-1 cursor-not-allowed rounded-xl bg-[#234357] px-4 py-3 text-sm font-semibold text-[#7694a5]">Chat unavailable</button>}
+                                <button onClick={() => void handleDelete()} disabled={deleting} className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#ffad9a]/35 px-4 py-3 text-sm text-[#ffb5a4] hover:bg-[#ff927a]/10 disabled:opacity-50"><Trash2 size={15} /> {deleting ? "Deleting" : "Delete"}</button>
                             </div>
                         </div>
                     </div>
-                </div>
+                </section>
             </div>
         </main>
     )
 }
-
-export default BookPage
-

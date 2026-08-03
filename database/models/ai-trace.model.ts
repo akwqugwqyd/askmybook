@@ -37,7 +37,7 @@ const AiTraceSchema = new Schema<IAiTrace>({
     averageRelevance: { type: Number },
     faithfulnessScore: { type: Number },
     errorCode: { type: String },
-    createdAt: { type: Date, default: Date.now, index: true },
+    createdAt: { type: Date, default: Date.now },
 })
 
 AiTraceSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 90 })

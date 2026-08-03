@@ -18,11 +18,15 @@ export function validateEnv() {
   }
 
   const dailyLimit = Number(process.env.AI_DAILY_REQUEST_LIMIT || 10)
-  const relevance = Number(process.env.RAG_MIN_RELEVANCE_SCORE || 0.25)
+  const relevance = Number(process.env.RAG_MIN_RELEVANCE_SCORE || 0.2)
+  const rerankRelevance = Number(process.env.RAG_MIN_RERANK_SCORE || 0.35)
   if (!Number.isInteger(dailyLimit) || dailyLimit < 1) {
     throw new Error("AI_DAILY_REQUEST_LIMIT must be a positive integer")
   }
   if (!Number.isFinite(relevance) || relevance < 0 || relevance > 1) {
     throw new Error("RAG_MIN_RELEVANCE_SCORE must be between 0 and 1")
+  }
+  if (!Number.isFinite(rerankRelevance) || rerankRelevance < 0 || rerankRelevance > 1) {
+    throw new Error("RAG_MIN_RERANK_SCORE must be between 0 and 1")
   }
 }

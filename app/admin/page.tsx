@@ -1,7 +1,8 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { Activity, Database, DollarSign, Gauge, MessageSquare, ShieldCheck } from "lucide-react"
+import { Activity, Database, DollarSign, Gauge, LoaderCircle, MessageSquare, ShieldCheck } from "lucide-react"
+import RecoveryPanel from "@/components/RecoveryPanel"
 
 interface Metrics {
     documents: Record<string, number>
@@ -25,19 +26,34 @@ interface Metrics {
 export default function AdminPage() {
     const [metrics, setMetrics] = useState<Metrics | null>(null)
     const [error, setError] = useState("")
+    const [loading, setLoading] = useState(true)
+
+    const requestMetrics = async () => {
+        try {
+            const response = await fetch("/api/admin/metrics", { cache: "no-store" })
+            const data = await response.json().catch(() => ({})) as Metrics & { error?: string }
+            if (!response.ok) throw new Error(data.error || "Metrics could not be loaded.")
+            setMetrics(data)
+        } catch (reason) {
+            setError(reason instanceof Error ? reason.message : "Metrics could not be loaded.")
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    const loadMetrics = () => {
+        setError("")
+        setLoading(true)
+        void requestMetrics()
+    }
 
     useEffect(() => {
-        fetch("/api/admin/metrics", { cache: "no-store" })
-            .then(async (response) => {
-                const data = await response.json()
-                if (!response.ok) throw new Error(data.error || "Metrics could not be loaded.")
-                setMetrics(data)
-            })
-            .catch((reason) => setError(reason instanceof Error ? reason.message : "Metrics could not be loaded."))
+        void requestMetrics()
     }, [])
 
-    if (error) return <main className="grid min-h-[70vh] place-items-center text-sm text-[#d58c84]">{error}</main>
-    if (!metrics) return <main className="grid min-h-[70vh] place-items-center text-sm text-[#8f8579]">Loading metrics…</main>
+    if (loading) return <main className="app-frame grid min-h-[70vh] place-items-center"><div className="flex items-center gap-3 text-sm text-[#9bb7c9]"><LoaderCircle size={17} className="animate-spin text-[#8ff5d3]" /> Loading metrics</div></main>
+    if (error && !metrics) return <main className="app-frame grid min-h-[70vh] place-items-center px-5"><RecoveryPanel title="Metrics could not be loaded" message={error} onRetry={loadMetrics} /></main>
+    if (!metrics) return null
 
     const cards = [
         ["AI requests · 24h", metrics.last24Hours.requests, Activity],
@@ -49,26 +65,29 @@ export default function AdminPage() {
     ] as const
 
     return (
-        <main className="min-h-screen bg-[#0d0c0a] px-6 py-10">
+        <main className="app-frame min-h-screen px-6 py-10">
             <div className="mx-auto max-w-6xl">
-                <p className="text-[11px] uppercase tracking-[0.2em] text-[#806f53]">Operations</p>
-                <h1 className="mt-2 text-3xl text-[#f0e6d0]">Intelligence metrics</h1>
+                <p className="eyebrow">Operations</p>
+                <h1 className="font-display mt-2 text-4xl tracking-[-0.04em] text-[#effaff]">Intelligence metrics</h1>
+                <p className="mt-2 text-sm text-[#9bb7c9]">A live pulse check on quality, cost, and the document pipeline.</p>
+                {error && <div className="mt-6 max-w-xl"><RecoveryPanel compact message={error} onRetry={loadMetrics} /></div>}
+
                 <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                     {cards.map(([label, value, Icon]) => (
-                        <div key={label} className="rounded-2xl border border-[#2c2721] bg-[#141210] p-5">
-                            <Icon size={17} className="text-[#e8c97a]" />
-                            <p className="mt-5 text-xs text-[#756a60]">{label}</p>
-                            <p className="mt-2 text-2xl text-[#eee2cd]">{value}</p>
+                        <div key={label} className="shell-card rounded-2xl p-5">
+                            <Icon size={17} className="text-[#8ff5d3]" />
+                            <p className="mt-5 text-xs text-[#91adbf]">{label}</p>
+                            <p className="mt-2 text-2xl font-semibold text-[#effaff]">{value}</p>
                         </div>
                     ))}
                 </div>
                 <div className="mt-6 grid gap-4 lg:grid-cols-2">
-                    <div className="rounded-2xl border border-[#2c2721] bg-[#141210] p-5">
-                        <h2 className="text-sm text-[#ddd1bf]">Document pipeline</h2>
-                        <pre className="mt-4 text-xs leading-6 text-[#968b7d]">{JSON.stringify(metrics.documents, null, 2)}</pre>
+                    <div className="shell-card rounded-2xl p-5">
+                        <h2 className="text-sm font-semibold text-[#e4f5ff]">Document pipeline</h2>
+                        <pre className="mt-4 text-xs leading-6 text-[#9db8c9]">{JSON.stringify(metrics.documents, null, 2)}</pre>
                     </div>
-                    <div className="rounded-2xl border border-[#2c2721] bg-[#141210] p-5 text-sm text-[#968b7d]">
-                        <h2 className="text-sm text-[#ddd1bf]">Quality · last 24 hours</h2>
+                    <div className="shell-card rounded-2xl p-5 text-sm text-[#9db8c9]">
+                        <h2 className="text-sm font-semibold text-[#e4f5ff]">Quality · last 24 hours</h2>
                         <p className="mt-4">Average relevance: {(metrics.last24Hours.averageRelevance * 100).toFixed(1)}%</p>
                         <p className="mt-2">Error rate: {(metrics.last24Hours.errorRate * 100).toFixed(1)}%</p>
                         <p className="mt-2">Average latency: {Math.round(metrics.last24Hours.averageDurationMs)}ms</p>

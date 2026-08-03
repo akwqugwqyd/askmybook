@@ -4,8 +4,8 @@ import "./globals.css"
 import Navbar from "@/components/Navbar"
 
 export const metadata: Metadata = {
-  title: "AskMyBook - Grounded answers from your documents",
-  description: "Build a private knowledge base and ask citation-backed questions across your PDFs.",
+  title: "AskMyBook | Your sources, on call",
+  description: "Turn your documents into a private, cited answer engine.",
 }
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
@@ -30,7 +30,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         },
       }}>
       <html lang="en">
-        <body className="flex h-full flex-col antialiased">
+        <body className="flex h-dvh flex-col antialiased">
           <Navbar />
           {children}
         </body>

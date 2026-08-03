@@ -4,6 +4,7 @@ import { auth } from "@clerk/nextjs/server"
 import cloudinary from "@/lib/cloudinary"
 import { logger } from "@/lib/logger"
 import { uploadIntentSchema } from "@/lib/validation"
+import { cloudinaryAllowedFormats } from "@/lib/document-types"
 
 export const runtime = "nodejs"
 export const maxDuration = 15
@@ -16,7 +17,7 @@ export async function POST(req: NextRequest) {
         const parsed = uploadIntentSchema.safeParse(await req.json())
         if (!parsed.success) {
             return NextResponse.json({
-                error: parsed.error.issues[0]?.message || "Invalid PDF upload request.",
+                error: parsed.error.issues[0]?.message || "Invalid upload request.",
             }, { status: 400 })
         }
 
@@ -29,9 +30,10 @@ export async function POST(req: NextRequest) {
 
         const timestamp = Math.floor(Date.now() / 1000)
         const folder = `ai-book/${userId}`
-        const generatedId = `${randomUUID()}.pdf`
+        const extension = parsed.data.fileName.toLowerCase().split(".").pop()
+        const generatedId = `${randomUUID()}.${extension}`
         const signedParameters = {
-            allowed_formats: "pdf",
+            allowed_formats: cloudinaryAllowedFormats,
             folder,
             public_id: generatedId,
             timestamp,

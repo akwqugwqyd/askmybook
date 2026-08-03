@@ -2,7 +2,9 @@
 
 import Link from "next/link"
 import { useMemo, useState } from "react"
-import { AlertCircle, CheckCircle2, FileText, LoaderCircle, UploadCloud, X } from "lucide-react"
+import { CheckCircle2, FileText, LoaderCircle, RefreshCw, UploadCloud, X } from "lucide-react"
+import { contentTypeFromFile, isSupportedDocumentUpload, supportedDocumentAccept } from "@/lib/document-types"
+import RecoveryPanel from "@/components/RecoveryPanel"
 
 type UploadState = "pending" | "uploading" | "processing" | "ready" | "failed"
 interface UploadItem {
@@ -43,7 +45,7 @@ interface ApiResult {
 }
 
 const titleFromFile = (name: string) =>
-    name.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim()
+    name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim()
 
 const hasPdfSignature = async (file: File): Promise<boolean> => {
     const bytes = new Uint8Array(await file.slice(0, 5).arrayBuffer())
@@ -56,12 +58,23 @@ const readJsonResponse = async <T,>(response: Response, fallbackError: string): 
         return response.json() as Promise<T>
     }
 
-    const text = (await response.text())
-        .replace(/<[^>]*>/g, " ")
-        .replace(/\s+/g, " ")
-        .trim()
+    // Error pages from a proxy or deployment should never be shown to users.
+    const statusMessage = response.status === 404
+        ? "The processing service is unavailable. Refresh the page and retry."
+        : fallbackError
+    await response.text()
+    throw new Error(statusMessage)
+}
 
-    throw new Error(text ? `${fallbackError} (${text.slice(0, 140)})` : fallbackError)
+const friendlyUploadError = (error: unknown): string => {
+    const message = error instanceof Error ? error.message : ""
+    if (/failed to fetch|networkerror|load failed/i.test(message)) {
+        return "We could not reach the upload service. Check your connection, then retry this file."
+    }
+    if (/timeout|timed out/i.test(message)) {
+        return "This took longer than expected. Your file is still listed here, so you can retry safely."
+    }
+    return message || "This file could not be processed. Retry it, or remove it and try again later."
 }
 
 export default function NewDocumentsPage() {
@@ -75,11 +88,11 @@ export default function NewDocumentsPage() {
         setPageError("")
         const incoming = Array.from(files)
         const invalid = incoming.find((file) =>
-            !(file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"))
+            !isSupportedDocumentUpload(file.name, file.type)
             || file.size > 50 * 1024 * 1024,
         )
         if (invalid) {
-            setPageError("Every file must be a PDF no larger than 50MB.")
+            setPageError("Upload PDF, DOCX, TXT, MD, HTML, CSV, JSON, or image files up to 50MB each.")
             return
         }
         setItems((current) => [
@@ -102,7 +115,7 @@ export default function NewDocumentsPage() {
             let documentId = item.documentId
             if (!documentId) {
                 update(item.id, { state: "uploading", error: undefined })
-                if (!await hasPdfSignature(item.file)) {
+                if (item.file.name.toLowerCase().endsWith(".pdf") && !await hasPdfSignature(item.file)) {
                     throw new Error("The file contents do not match a valid PDF.")
                 }
 
@@ -112,7 +125,7 @@ export default function NewDocumentsPage() {
                     body: JSON.stringify({
                         fileName: item.file.name,
                         fileSize: item.file.size,
-                        contentType: item.file.type || "application/pdf",
+                        contentType: contentTypeFromFile(item.file.name, item.file.type),
                     }),
                 })
                 const intent = await readJsonResponse<UploadIntent>(
@@ -157,6 +170,7 @@ export default function NewDocumentsPage() {
                         storagePublicId: upload.public_id,
                         documentName: item.file.name,
                         fileSize: item.file.size,
+                        contentType: contentTypeFromFile(item.file.name, item.file.type),
                     }),
                 })
                 const created = await readJsonResponse<ApiResult>(
@@ -170,7 +184,11 @@ export default function NewDocumentsPage() {
             }
 
             update(item.id, { state: "processing" })
-            const processResponse = await fetch(`/api/books/${documentId}/process`, { method: "POST" })
+            const processResponse = await fetch("/api/process-document", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ documentId }),
+            })
             const processed = await readJsonResponse<ApiResult>(
                 processResponse,
                 "Document processing failed.",
@@ -183,10 +201,7 @@ export default function NewDocumentsPage() {
                 state: processed.book?.processingStatus === "ready" ? "ready" : "processing",
             })
         } catch (error) {
-            update(item.id, {
-                state: "failed",
-                error: error instanceof Error ? error.message : "This document could not be processed.",
-            })
+            update(item.id, { state: "failed", error: friendlyUploadError(error) })
         }
     }
 
@@ -199,35 +214,35 @@ export default function NewDocumentsPage() {
         }
         setRunning(true)
         setPageError("")
-
-        // A small worker pool keeps memory and third-party API pressure bounded.
-        const queue = [...pending]
-        const workers = Array.from({ length: Math.min(2, queue.length) }, async () => {
-            while (queue.length) {
-                const item = queue.shift()
-                if (item) await processItem(item)
-            }
-        })
-        await Promise.all(workers)
-        setRunning(false)
+        try {
+            // A small worker pool keeps memory and third-party API pressure bounded.
+            const queue = [...pending]
+            const workers = Array.from({ length: Math.min(2, queue.length) }, async () => {
+                while (queue.length) {
+                    const item = queue.shift()
+                    if (item) await processItem(item)
+                }
+            })
+            await Promise.all(workers)
+        } finally {
+            setRunning(false)
+        }
     }
 
     return (
-        <main className="min-h-screen bg-[#0d0c0a] px-4 py-10 sm:px-7">
+        <main className="app-frame min-h-screen px-4 py-10 sm:px-7">
             <div className="mx-auto max-w-3xl">
-                <Link href="/dashboard" className="text-xs text-[#82766a] hover:text-[#e8c97a]">← Knowledge base</Link>
+                <Link href="/dashboard" className="text-xs font-semibold text-[#9bc2d8] hover:text-[#a7ffe1]">← Knowledge base</Link>
                 <header className="mt-6">
-                    <p className="text-[11px] uppercase tracking-[0.2em] text-[#806f53]">Document ingestion</p>
-                    <h1 className="mt-2 font-[var(--font-ibm-plex-serif)] text-3xl text-[#f0e6d0]">Add to your knowledge base</h1>
-                    <p className="mt-2 text-sm leading-6 text-[#7d7267]">
-                        Upload several PDFs at once. Each file is extracted, chunked, and indexed independently.
+                    <p className="eyebrow">Documents</p>
+                    <h1 className="font-display mt-2 text-4xl tracking-[-0.04em] text-[#effaff]">Add documents</h1>
+                    <p className="mt-2 max-w-xl text-sm leading-6 text-[#9bb6c9]">
+                        Upload documents, data files, or images. Each file is processed independently and can be searched after indexing.
                     </p>
                 </header>
 
                 {pageError && (
-                    <div className="mt-6 flex gap-2 rounded-xl border border-[#55302d] bg-[#241513] px-4 py-3 text-sm text-[#d58c84]">
-                        <AlertCircle size={17} className="mt-0.5 shrink-0" /> {pageError}
-                    </div>
+                    <div className="mt-6"><RecoveryPanel compact message={pageError} onRetry={() => setPageError("")} retryLabel="Dismiss" /></div>
                 )}
 
                 <label
@@ -236,61 +251,68 @@ export default function NewDocumentsPage() {
                         event.preventDefault()
                         addFiles(event.dataTransfer.files)
                     }}
-                    className="mt-7 flex cursor-pointer flex-col items-center rounded-2xl border border-dashed border-[#453b30] bg-[#141210] px-6 py-12 text-center hover:border-[#806b42]">
+                    className="shell-card mt-7 flex cursor-pointer flex-col items-center rounded-[1.5rem] border border-dashed border-[#87dcca]/45 px-6 py-12 text-center transition hover:-translate-y-0.5 hover:border-[#8ff5d3] hover:bg-[#15334a]/80">
                     <input
                         type="file"
-                        accept=".pdf,application/pdf"
+                        accept={supportedDocumentAccept}
                         multiple
                         disabled={running}
                         className="hidden"
                         onChange={(event) => event.target.files && addFiles(event.target.files)}
                     />
-                    <span className="grid h-12 w-12 place-items-center rounded-2xl bg-[#211c14] text-[#e8c97a]"><UploadCloud size={22} /></span>
-                    <p className="mt-4 text-sm font-medium text-[#dfd2bd]">Drop PDFs here, or browse</p>
-                    <p className="mt-1 text-xs text-[#6f665d]">Multiple files · up to 50MB each</p>
+                    <span className="grid h-12 w-12 place-items-center rounded-2xl bg-[#8ff5d3]/14 text-[#8ff5d3]"><UploadCloud size={22} /></span>
+                    <p className="mt-4 text-sm font-bold text-[#e6f6ff]">Drop files here, or browse</p>
+                    <p className="mt-1 text-xs text-[#8eabc0]">PDF, DOCX, text, data, and images · up to 50MB each</p>
                 </label>
 
                 {items.length > 0 && (
-                    <section className="mt-6 overflow-hidden rounded-2xl border border-[#2c2721] bg-[#12100e]">
-                        <div className="border-b border-[#2c2721] px-5 py-4">
-                            <label className="text-[11px] uppercase tracking-[0.16em] text-[#756a60]">Author (optional, applies to all)</label>
+                    <section className="shell-card mt-6 overflow-hidden rounded-2xl">
+                        <div className="border-b border-[#b7e6ff]/12 px-5 py-4">
+                            <label className="eyebrow">Author or organisation (optional)</label>
                             <input
                                 value={author}
                                 onChange={(event) => setAuthor(event.target.value)}
                                 disabled={running}
                                 placeholder="Author or organization"
                                 maxLength={160}
-                                className="mt-2 w-full rounded-lg border border-[#393128] bg-[#171410] px-3 py-2.5 text-sm text-[#e4d7c2] outline-none focus:border-[#806b42]"
+                                className="mt-2 w-full rounded-xl border border-[#b7e6ff]/18 bg-[#071b2b]/75 px-3 py-2.5 text-sm text-[#e4f5ff] outline-none placeholder:text-[#718da1] focus:border-[#8ff5d3]"
                             />
                         </div>
-                        <div className="divide-y divide-[#27221d]">
+                        <div className="divide-y divide-[#b7e6ff]/10">
                             {items.map((item) => (
                                 <div key={item.id} className="grid gap-3 px-4 py-4 sm:grid-cols-[28px_1fr_auto] sm:items-center">
-                                    <FileText size={18} className="text-[#8d806f]" />
+                                    <FileText size={18} className="text-[#8ddfc8]" />
                                     <div className="min-w-0">
                                         <input
                                             value={item.title}
                                             disabled={running || item.state === "ready"}
                                             maxLength={200}
                                             onChange={(event) => update(item.id, { title: event.target.value })}
-                                            className="w-full truncate bg-transparent text-sm text-[#dfd2bd] outline-none disabled:opacity-80"
+                                            className="w-full truncate bg-transparent text-sm font-semibold text-[#e7f7ff] outline-none disabled:opacity-80"
                                         />
-                                        <p className="mt-1 text-[11px] text-[#655c53]">
+                                        <p className="mt-1 text-[11px] text-[#8ca9bb]">
                                             {item.file.name} · {(item.file.size / 1024 / 1024).toFixed(1)}MB
                                         </p>
-                                        {item.error && <p className="mt-1 text-xs text-[#c87c74]">{item.error}</p>}
+                                        {item.error && <p className="mt-1 text-xs leading-5 text-[#ffad9a]">{item.error}</p>}
                                     </div>
                                     <div className="flex items-center gap-2">
                                         {(item.state === "uploading" || item.state === "processing") && (
-                                            <span className="flex items-center gap-2 text-xs text-[#c7a967]">
+                                            <span className="flex items-center gap-2 text-xs font-semibold text-[#a7ffe1]">
                                                 <LoaderCircle size={14} className="animate-spin" />
                                                 {item.state === "uploading" ? "Uploading" : "Indexing"}
                                             </span>
                                         )}
-                                        {item.state === "ready" && <CheckCircle2 size={17} className="text-[#88a978]" />}
-                                        {item.state === "failed" && <AlertCircle size={17} className="text-[#c87c74]" />}
+                                        {item.state === "ready" && <CheckCircle2 size={17} className="text-[#8ff5d3]" />}
+                                        {item.state === "failed" && (
+                                            <button
+                                                onClick={() => void processItem(item)}
+                                                disabled={running}
+                                                className="button-secondary inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[10px]">
+                                                <RefreshCw size={12} /> Retry
+                                            </button>
+                                        )}
                                         {item.state === "pending" && !running && (
-                                            <button onClick={() => setItems((current) => current.filter((value) => value.id !== item.id))} aria-label="Remove file" className="p-1 text-[#776b60]">
+                                            <button onClick={() => setItems((current) => current.filter((value) => value.id !== item.id))} aria-label="Remove file" className="p-1 text-[#8ca9bb] hover:text-[#ffad9a]">
                                                 <X size={16} />
                                             </button>
                                         )}
@@ -302,21 +324,21 @@ export default function NewDocumentsPage() {
                 )}
 
                 <div className="mt-6 flex items-center justify-between gap-4">
-                    <p className="text-xs text-[#71675d]">
+                    <p className="text-xs leading-5 text-[#8daabd]">
                         {running
                             ? "Keep this page open while files are indexed."
                             : completed
                                 ? `${completed} document${completed === 1 ? "" : "s"} ready.`
-                                : "Files are account-isolated and processed by your configured AI providers."}
+                                : ""}
                     </p>
                     <div className="flex gap-2">
                         {completed > 0 && !running && (
-                            <Link href="/dashboard" className="rounded-xl border border-[#3a332b] px-4 py-2.5 text-sm text-[#cfc2ad]">View library</Link>
+                            <Link href="/dashboard" className="button-secondary px-4 py-2.5 text-sm">View library</Link>
                         )}
                         <button
                             onClick={() => void start()}
                             disabled={running || !items.some((item) => item.state === "pending" || item.state === "failed")}
-                            className="rounded-xl bg-[#e8c97a] px-5 py-2.5 text-sm font-semibold text-[#17130e] disabled:opacity-35">
+                            className="button-primary px-5 py-2.5 text-sm">
                             {running ? "Processing…" : `Process ${items.filter((item) => item.state === "pending" || item.state === "failed").length || ""} document${items.filter((item) => item.state === "pending" || item.state === "failed").length === 1 ? "" : "s"}`}
                         </button>
                     </div>

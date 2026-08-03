@@ -27,9 +27,9 @@ export async function POST(req: NextRequest) {
         if (!parsed.success) {
             return NextResponse.json({ error: "Invalid document metadata." }, { status: 400 })
         }
-        const { title, author, pdfUrl, documentName, fileSize, storagePublicId } = parsed.data
+        const { title, author, pdfUrl, documentName, fileSize, storagePublicId, contentType } = parsed.data
         if (!isOwnedCloudinaryUpload(pdfUrl, storagePublicId, userId)) {
-            return NextResponse.json({ error: "The PDF upload reference is invalid." }, { status: 400 })
+            return NextResponse.json({ error: "The document upload reference is invalid." }, { status: 400 })
         }
 
         const book = await Book.create({
@@ -40,6 +40,7 @@ export async function POST(req: NextRequest) {
             documentName,
             fileSize,
             storagePublicId: storagePublicId || undefined,
+            contentType,
             processingStatus: "queued",
         }) as IBook
 

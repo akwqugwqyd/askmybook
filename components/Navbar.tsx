@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { SignInButton, UserButton, useUser } from "@clerk/nextjs"
+import { Sparkles } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const navItems = [
@@ -16,14 +17,15 @@ const Navbar = () => {
     const { user, isLoaded } = useUser()
 
     return (
-        <header className="sticky top-0 z-40 w-full border-b border-[#2a2520] bg-[#0d0c0a]/95 backdrop-blur">
-            <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-4 px-4 py-3 sm:px-6">
-                <Link href="/" className="shrink-0 text-base font-semibold tracking-wide text-[#e8c97a] sm:text-lg">
-                    AskMyBook
+        <header className="sticky top-0 z-40 h-[var(--app-nav-height)] shrink-0 border-b border-[#b7e6ff]/12 bg-[#07131f]/82 backdrop-blur-xl">
+            <div className="mx-auto flex h-full max-w-[1500px] items-center justify-between gap-4 px-4 sm:px-6">
+                <Link href="/" className="flex shrink-0 items-center gap-2 text-base font-bold tracking-tight text-[#effaff] sm:text-lg">
+                    <span className="grid h-7 w-7 place-items-center rounded-lg bg-[#8ff5d3] text-[#07201c]"><Sparkles size={14} /></span>
+                    Ask<span className="text-[#8ff5d3]">MyBook</span>
                 </Link>
 
                 <nav className="flex min-w-0 items-center gap-2 sm:gap-5">
-                    <div className="hidden items-center gap-1 rounded-full border border-[#29241e] bg-[#12100e] p-1 md:flex">
+                    <div className="hidden items-center gap-1 rounded-full border border-[#b7e6ff]/15 bg-[#0c2132]/80 p-1 md:flex">
                         {navItems.map(({ label, href }) => {
                             const isActive = pathName === href || (href !== "/" && pathName?.startsWith(href))
 
@@ -34,8 +36,8 @@ const Navbar = () => {
                                     className={cn(
                                         "rounded-full px-3 py-1.5 text-xs transition",
                                         isActive
-                                            ? "bg-[#2a2113] text-[#e8c97a]"
-                                            : "text-[#8b8176] hover:bg-[#1b1814] hover:text-[#d4c5a9]",
+                                            ? "bg-[#8ff5d3]/14 text-[#a7ffe1]"
+                                            : "text-[#91afc1] hover:bg-[#b7e6ff]/10 hover:text-[#e4f7ff]",
                                     )}>
                                     {label}
                                 </Link>
@@ -45,7 +47,7 @@ const Navbar = () => {
 
                     {isLoaded && !user && (
                         <SignInButton mode="modal">
-                            <button className="rounded-xl bg-[#e8c97a] px-4 py-2 text-sm font-semibold text-[#0d0c0a] transition hover:bg-[#d4b560]">
+                            <button className="button-primary px-4 py-2 text-sm">
                                 Sign in
                             </button>
                         </SignInButton>
