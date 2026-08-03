@@ -17,10 +17,10 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
   // Show loading state while checking auth
   if (!isLoaded) {
     return (
-      <div className="min-h-screen bg-[#0D0C0A] flex items-center justify-center">
+      <div className="app-frame flex min-h-screen items-center justify-center">
         <div className="flex flex-col items-center gap-4">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#E8C97A]"></div>
-          <p className="text-[#7A6E62]">Loading...</p>
+          <div className="h-12 w-12 animate-spin rounded-full border-2 border-[#8ff5d3] border-t-transparent"></div>
+          <p className="text-[#9bb7c9]">Opening your workspace...</p>
         </div>
       </div>
     )

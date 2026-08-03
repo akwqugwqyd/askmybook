@@ -1,6 +1,6 @@
 # AskMyBook
 
-AskMyBook is a Next.js app for uploading PDFs and asking grounded questions against your own documents.
+AskMyBook is a Next.js app for uploading documents, data files, and images, then asking grounded questions against them.
 
 ## Requirements
 
@@ -63,4 +63,6 @@ npm run build
 ## Notes
 
 - The app uses Node.js runtime APIs for PDF processing.
-- Chat answers are grounded in retrieved document chunks.
+- Retrieval combines Pinecone semantic search with MongoDB full-text search using reciprocal-rank fusion.
+- An OpenAI listwise reranker scores fused candidates before grounded answer generation.
+- Chat answers include citations to the retrieved document chunks.

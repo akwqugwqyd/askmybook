@@ -38,6 +38,13 @@ const ChunkSchema = new Schema<IChunk>(
 )
 
 ChunkSchema.index({ userId: 1, documentId: 1, chunkIndex: 1 }, { unique: true })
+ChunkSchema.index(
+    { userId: 1, content: "text", sectionTitle: "text", documentName: "text" },
+    {
+        name: "chunk_lexical_search",
+        weights: { sectionTitle: 4, documentName: 2, content: 1 },
+    },
+)
 
 const Chunk: Model<IChunk> =
     mongoose.models.Chunk || mongoose.model<IChunk>("Chunk", ChunkSchema)

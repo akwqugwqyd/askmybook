@@ -14,6 +14,7 @@ export interface IBook extends Document {
     coverImage?: string;
     pdfUrl: string;
     storagePublicId?: string;
+    contentType?: string;
     userId: string;
     documentName: string;
     fileSize: number;
@@ -59,7 +60,7 @@ const BookSchema: Schema<IBook> = new Schema(
         },
         pdfUrl: {
             type: String,
-            required: [true, "PDF URL is required"],
+            required: [true, "Document URL is required"],
         },
         userId: {
             type: String,
@@ -68,6 +69,10 @@ const BookSchema: Schema<IBook> = new Schema(
         },
         storagePublicId: {
             type: String,
+        },
+        contentType: {
+            type: String,
+            default: "application/octet-stream",
         },
         documentName: {
             type: String,
@@ -121,13 +126,7 @@ const BookSchema: Schema<IBook> = new Schema(
         embeddingVersion: { type: Number, default: 1 },
         extractionMethod: { type: String, enum: ["text", "ocr"] },
         checksum: { type: String, index: true },
-        metadata: {
-            pdfTitle: { type: String },
-            pdfAuthor: { type: String },
-            creator: { type: String },
-            producer: { type: String },
-            creationDate: { type: String },
-        },
+        metadata: { type: Schema.Types.Mixed },
     },
     {
         timestamps: true, // auto adds createdAt and updatedAt

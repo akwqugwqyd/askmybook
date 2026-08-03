@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { isSupportedDocumentUpload } from "@/lib/document-types"
 
 const objectId = z.string().regex(/^[a-f\d]{24}$/i, "Invalid identifier")
 
@@ -17,14 +18,14 @@ export const createDocumentSchema = z.object({
     documentName: z.string().trim().min(1).max(255),
     fileSize: z.number().int().positive().max(50 * 1024 * 1024),
     storagePublicId: z.string().trim().min(1).max(512),
+    contentType: z.string().trim().max(160).default("application/octet-stream"),
 })
 
 export const uploadIntentSchema = z.object({
     fileName: z.string().trim().min(1).max(255),
     fileSize: z.number().int().positive().max(50 * 1024 * 1024),
-    contentType: z.string().trim().max(160).default("application/pdf"),
+    contentType: z.string().trim().max(160).default("application/octet-stream"),
 }).refine(
-    ({ fileName, contentType }) =>
-        fileName.toLowerCase().endsWith(".pdf") || contentType === "application/pdf",
-    { message: "Only PDF files are supported." },
+    ({ fileName, contentType }) => isSupportedDocumentUpload(fileName, contentType),
+    { message: "Unsupported file type. Upload PDF, DOCX, TXT, MD, HTML, CSV, JSON, PNG, JPG, WEBP, or GIF." },
 )

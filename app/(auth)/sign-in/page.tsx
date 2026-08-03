@@ -4,14 +4,15 @@ import { SignIn } from '@clerk/nextjs'
 
 export default function SignInPage() {
   return (
-    <div className="min-h-screen bg-[#0D0C0A] flex flex-col items-center justify-center px-6">
+    <div className="app-frame flex min-h-screen flex-col items-center justify-center px-6 py-12">
       <div className="w-full max-w-md">
         <div className="mb-8 text-center">
-          <h1 className="text-2xl font-medium text-[#E8C97A] mb-2">
-            Welcome to AskMyBook
+          <p className="eyebrow">AskMyBook</p>
+          <h1 className="font-display mt-2 text-4xl tracking-[-0.04em] text-[#effaff]">
+            Sign in
           </h1>
-          <p className="text-sm text-[#7A6E62]">
-            Sign in to upload documents and ask grounded questions
+          <p className="mt-2 text-sm text-[#9bb7c9]">
+            Access your documents and chat history.
           </p>
         </div>
         
@@ -20,20 +21,20 @@ export default function SignInPage() {
             appearance={{
               elements: {
                 rootBox: 'w-full',
-                card: 'bg-[#141210] border border-[#2A2520]',
-                headerTitle: 'text-[#F0E6D0]',
-                headerSubtitle: 'text-[#7A6E62]',
-                socialButtonsBlockButton: 'bg-[#1F1C19] border border-[#2A2520] text-[#D4C5A9] hover:bg-[#2A2520]',
-                formButtonPrimary: 'bg-[#E8C97A] text-[#0D0C0A] hover:bg-[#D4B560]',
-                formFieldInput: 'bg-[#1F1C19] border-[#2A2520] text-[#D4C5A9]',
-                formFieldLabel: 'text-[#7A6E62]',
-                dividerLine: 'bg-[#2A2520]',
-                dividerText: 'text-[#7A6E62]',
-                footerActionLink: 'text-[#E8C97A] hover:text-[#D4B560]',
+                card: 'border border-[#b7e6ff]/20 bg-[#0d293c] shadow-2xl shadow-black/25',
+                headerTitle: 'text-[#effaff]',
+                headerSubtitle: 'text-[#9bb7c9]',
+                socialButtonsBlockButton: 'border border-[#b7e6ff]/18 bg-[#102e43] text-[#d9effb] hover:bg-[#173c54]',
+                formButtonPrimary: 'bg-[#8ff5d3] text-[#07201c] hover:bg-[#c0ffe9]',
+                formFieldInput: 'border-[#b7e6ff]/20 bg-[#081e2e] text-[#d9effb]',
+                formFieldLabel: 'text-[#a9c4d5]',
+                dividerLine: 'bg-[#b7e6ff]/16',
+                dividerText: 'text-[#9bb7c9]',
+                footerActionLink: 'text-[#8ff5d3] hover:text-[#c0ffe9]',
               },
               variables: {
-                colorPrimary: '#E8C97A',
-                colorBackground: '#0D0C0A',
+                colorPrimary: '#8ff5d3',
+                colorBackground: '#0d293c',
               },
             }}
             signUpUrl="/sign-up"

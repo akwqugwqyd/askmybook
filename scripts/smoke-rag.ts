@@ -8,6 +8,7 @@ import RagCache from "@/database/models/rag-cache.model"
 import User from "@/database/models/user.model"
 import { processDocument } from "@/lib/document-processing"
 import { streamAgenticRag } from "@/lib/agentic-rag"
+import { hybridSearch } from "@/lib/hybrid-retrieval"
 import { checkRequestLimit } from "@/lib/ai-rate-limit"
 import { deleteDocumentVectors } from "@/lib/vector-store"
 
@@ -93,12 +94,24 @@ const main = async () => {
             throw new Error("Document did not reach ready state with persisted chunks.")
         }
 
+        const hybridCandidates = await hybridSearch(
+            `verification token ${verificationToken}`,
+            { userId, documentIds: [documentId] },
+        )
+        const retrievalChannels = new Set(hybridCandidates.flatMap((candidate) => candidate.retrievalChannels))
+        if (!retrievalChannels.has("dense") || !retrievalChannels.has("lexical")) {
+            console.error({ hybridCandidates, retrievalChannels: [...retrievalChannels] })
+            throw new Error("Hybrid retrieval did not return both dense and lexical results.")
+        }
+
         let finalAnswer = ""
         let citationCount = 0
+        let rerankerCompleted = false
         for await (const update of streamAgenticRag(
             "What is the verification token?",
             { userId, documentIds: [documentId] },
         )) {
+            if (update.node === "reranker") rerankerCompleted = true
             if (!update.finalAnswer) continue
             finalAnswer = update.finalAnswer
             citationCount = update.citations?.length || 0
@@ -108,11 +121,13 @@ const main = async () => {
             !finalAnswer.toLowerCase().includes(verificationToken)
             || citationCount < 1
             || containsInlineCitation
+            || !rerankerCompleted
         ) {
             console.error({
                 finalAnswer,
                 citationCount,
                 containsInlineCitation,
+                rerankerCompleted,
             })
             throw new Error("Grounded answer or citation verification failed.")
         }
@@ -132,7 +147,8 @@ const main = async () => {
             extraction: "ok",
             chunkPersistence: `${persistedChunks} chunk(s)`,
             vectorIndexing: "ok",
-            filteredRetrieval: "ok",
+            hybridRetrieval: "dense + lexical + RRF",
+            reranking: "ok",
             groundedAnswer: "ok",
             citations: `${citationCount} citation(s)`,
             rateLimit: "10 requests / 24 hours",
@@ -157,6 +173,6 @@ const main = async () => {
 }
 
 main().catch((error) => {
-    console.error(error instanceof Error ? error.message : "RAG smoke test failed")
+    console.error(error instanceof Error ? error.stack || error.message : "RAG smoke test failed")
     process.exitCode = 1
 })

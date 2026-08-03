@@ -3,15 +3,14 @@ import cloudinary from "@/lib/cloudinary"
 const expiresAt = () => Math.floor(Date.now() / 1000) + 600
 
 export const signedDocumentUrl = (
-    pdfUrl: string,
+    documentUrl: string,
     storagePublicId?: string,
 ): string => {
-    if (!storagePublicId) return pdfUrl
+    if (!storagePublicId) return documentUrl
 
-    // Direct raw uploads retain the .pdf extension in their public ID.
-    // Cloudinary's authenticated download endpoint must receive that complete
-    // public ID with an empty separate format value.
-    if (storagePublicId.toLowerCase().endsWith(".pdf")) {
+    // Raw uploads retain their extension in the public ID. Cloudinary's
+    // authenticated download endpoint must receive that complete ID.
+    if (/\.[a-z0-9]+$/i.test(storagePublicId)) {
         return cloudinary.utils.private_download_url(storagePublicId, "", {
             resource_type: "raw",
             type: "authenticated",
