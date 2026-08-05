@@ -3,7 +3,7 @@ import { auth } from "@clerk/nextjs/server"
 import mongoose from "mongoose"
 import { checkRequestLimit, getUserRequestStatus } from "@/lib/ai-rate-limit"
 import { logger } from "@/lib/logger"
-import { streamAgenticRag, type AgenticRagGraphUpdate } from "@/lib/agentic-rag"
+import { ragQualityMode, streamAgenticRag, type AgenticRagGraphUpdate } from "@/lib/agentic-rag"
 import dbConnect from "@/database/mongoose"
 import Book from "@/database/models/book.model"
 import Chunk from "@/database/models/chunk.model"
@@ -13,6 +13,7 @@ import { answerCacheKey, getCachedAnswer, setCachedAnswer } from "@/lib/rag-cach
 import { createTraceId, estimateCost, estimateTokens, recordTrace } from "@/lib/telemetry"
 import { chatRequestSchema } from "@/lib/validation"
 import { CURRENT_EMBEDDING_VERSION, CURRENT_INDEXING_VERSION } from "@/lib/ai-config"
+import { activePhoenixContext, withRagTrace } from "@/lib/phoenix-observability"
 
 export const runtime = "nodejs"
 export const maxDuration = 300
@@ -192,14 +193,14 @@ export async function POST(req: NextRequest) {
         const documentQuery = scope === "all"
             ? {
                 userId,
-                processingStatus: "ready",
+                processingStatus: "ready" as const,
                 indexingVersion: { $gte: CURRENT_INDEXING_VERSION },
                 embeddingVersion: CURRENT_EMBEDDING_VERSION,
             }
             : {
                 userId,
                 _id: { $in: documentIds },
-                processingStatus: "ready",
+                processingStatus: "ready" as const,
                 indexingVersion: { $gte: CURRENT_INDEXING_VERSION },
                 embeddingVersion: CURRENT_EMBEDDING_VERSION,
             }
@@ -358,8 +359,18 @@ export async function POST(req: NextRequest) {
         const stream = new ReadableStream<Uint8Array>({
             async start(controller) {
                 let finalReply = ""
+                let phoenixTraceId: string | undefined
                 try {
-                    if (cachedAnswer) {
+                    await withRagTrace({
+                        traceId,
+                        userId,
+                        conversationId,
+                        documentCount: documentIds.length,
+                        qualityMode: ragQualityMode,
+                        operation: cachedAnswer ? "cache_hit" : "grounded_chat",
+                    }, async () => {
+                        phoenixTraceId = activePhoenixContext().traceId
+                        if (cachedAnswer) {
                         finalReply = cachedAnswer.reply
                         await ChatMessage.create({
                             userId,
@@ -393,16 +404,20 @@ export async function POST(req: NextRequest) {
                             inputTokens: estimateTokens(message),
                             outputTokens,
                             estimatedCostUsd: 0,
-                            retrievedChunks: cachedAnswer.citations.length,
+                            retrievedChunks: 0,
+                            gradedChunks: 0,
+                            relevantChunks: 0,
                             citationCount: cachedAnswer.citations.length,
                             averageRelevance: cachedAnswer.citations.length
                                 ? cachedAnswer.citations.reduce((sum, citation) => sum + (citation.relevance || 0), 0)
                                     / cachedAnswer.citations.length
                                 : undefined,
-                            faithfulnessScore: 1,
+                            verificationStatus: "not_evaluated_cache_hit",
+                            qualityMode: ragQualityMode,
+                            phoenixTraceId,
                         })
                         return
-                    }
+                        }
 
                     controller.enqueue(encodeEvent({
                         type: "status",
@@ -452,6 +467,7 @@ export async function POST(req: NextRequest) {
                             node: update.node,
                         })
                         const citations = update.citations ?? []
+                        const diagnostics = update.diagnostics
                         const inputTokens = update.tokenUsage?.inputTokens
                             || estimateTokens(`${conversationContext}\n${message}`)
                         const outputTokens = update.tokenUsage?.outputTokens
@@ -468,15 +484,26 @@ export async function POST(req: NextRequest) {
                             inputTokens,
                             outputTokens,
                             estimatedCostUsd: estimateCost(inputTokens, outputTokens),
-                            retrievedChunks: citations.length,
+                            retrievedChunks: diagnostics?.retrievedChunkCount ?? 0,
+                            gradedChunks: diagnostics?.gradedChunkCount,
+                            relevantChunks: diagnostics?.relevantChunkCount,
                             citationCount: citations.length,
                             averageRelevance: citations.length
                                 ? citations.reduce((sum, citation) => sum + (citation.relevance || 0), 0)
                                     / citations.length
                                 : undefined,
-                            faithfulnessScore: update.status === "Complete" ? 1 : 0.5,
+                            faithfulnessScore: diagnostics?.verificationStatus === "supported"
+                                ? 1
+                                : diagnostics?.verificationStatus === "unsupported"
+                                    ? 0
+                                    : undefined,
+                            verificationStatus: diagnostics?.verificationStatus,
+                            qualityMode: diagnostics?.qualityMode ?? ragQualityMode,
+                            phoenixTraceId,
+                            nodeDurationsMs: diagnostics?.nodeDurationsMs,
                         })
                     }
+                    })
 
                     if (!finalReply) throw new Error("The answer pipeline did not return a final response.")
                 } catch (streamError) {
@@ -495,6 +522,9 @@ export async function POST(req: NextRequest) {
                         estimatedCostUsd: 0,
                         retrievedChunks: 0,
                         citationCount: 0,
+                        verificationStatus: "pipeline_error",
+                        qualityMode: ragQualityMode,
+                        phoenixTraceId,
                         errorCode: "CHAT_STREAM_FAILED",
                     })
                     controller.enqueue(encodeEvent({

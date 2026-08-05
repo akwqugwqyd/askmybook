@@ -63,6 +63,7 @@ export interface AgenticRagState {
     retryCount: Record<string, number>
     iterationCount: number
     status: RagStatus
+    verificationStatus: VerificationStatus
 }
 
 export interface AgenticRagGraphUpdate {
@@ -71,15 +72,34 @@ export interface AgenticRagGraphUpdate {
     finalAnswer?: string
     citations?: SourceCitation[]
     tokenUsage?: TokenUsage
+    diagnostics?: RagDiagnostics
 }
 
+export type VerificationStatus =
+    | "supported"
+    | "unsupported"
+    | "skipped_fast_mode"
+    | "checker_failed"
+    | "not_applicable"
+
 type RagQualityMode = "fast" | "balanced" | "thorough"
+
+export interface RagDiagnostics {
+    qualityMode: RagQualityMode
+    verificationStatus: VerificationStatus
+    retrievedChunkCount: number
+    gradedChunkCount: number
+    relevantChunkCount: number
+    contexts: string[]
+    nodeDurationsMs: Record<string, number>
+}
 
 const configuredQualityMode = process.env.RAG_QUALITY_MODE?.toLowerCase()
 const QUALITY_MODE: RagQualityMode = configuredQualityMode === "balanced"
     || configuredQualityMode === "thorough"
     ? configuredQualityMode
     : "fast"
+export const ragQualityMode: RagQualityMode = QUALITY_MODE
 const MAX_SUB_QUESTION_RETRIES = QUALITY_MODE === "thorough" ? 2 : 1
 const MAX_GRAPH_ITERATIONS = QUALITY_MODE === "thorough" ? 6 : 3
 const MAX_SUB_QUESTIONS = QUALITY_MODE === "thorough" ? 5 : 3
@@ -127,6 +147,7 @@ const AgenticRagAnnotation = Annotation.Root({
     retryCount: Annotation<Record<string, number>>,
     iterationCount: Annotation<number>,
     status: Annotation<RagStatus>,
+    verificationStatus: Annotation<VerificationStatus>,
 })
 
 const emptyState = (question: string, conversationContext = ""): AgenticRagState => ({
@@ -141,6 +162,7 @@ const emptyState = (question: string, conversationContext = ""): AgenticRagState
     retryCount: {},
     iterationCount: 0,
     status: "Breaking down your question...",
+    verificationStatus: "not_applicable",
 })
 
 const chatModel = (temperature: number) => new ChatOpenAI({
@@ -188,6 +210,26 @@ const dedupeChunks = <T extends RetrievedChunk>(chunks: T[]): T[] => {
         seen.add(key)
         return true
     })
+}
+
+const diagnosticsFromState = (
+    state: Partial<AgenticRagState>,
+    nodeDurationsMs: Record<string, number>,
+): RagDiagnostics => {
+    const retrieved = dedupeChunks(Object.values(state.retrievedChunks ?? {}).flat())
+    const graded = state.gradedChunks?.synthesised
+        ?? dedupeChunks(Object.values(state.gradedChunks ?? {}).flat())
+    const relevant = graded.filter((chunk) => chunk.relevant)
+
+    return {
+        qualityMode: QUALITY_MODE,
+        verificationStatus: state.verificationStatus ?? "not_applicable",
+        retrievedChunkCount: retrieved.length,
+        gradedChunkCount: graded.length,
+        relevantChunkCount: relevant.length,
+        contexts: relevant.map((chunk) => chunk.content),
+        nodeDurationsMs: { ...nodeDurationsMs },
+    }
 }
 
 const excerptFromContent = (content: string): string =>
@@ -503,6 +545,7 @@ const createHallucinationCheckerNode = () => async (state: AgenticRagState): Pro
             finalAnswer,
             citations: citationsForAnswer(finalAnswer, evidence),
             status: "Using best available answer...",
+            verificationStatus: "not_applicable",
         }
     }
 
@@ -511,6 +554,7 @@ const createHallucinationCheckerNode = () => async (state: AgenticRagState): Pro
             finalAnswer: state.draftAnswer,
             citations: citationsForAnswer(state.draftAnswer, evidence),
             status: "Complete",
+            verificationStatus: "skipped_fast_mode",
         }
     }
 
@@ -532,6 +576,7 @@ const createHallucinationCheckerNode = () => async (state: AgenticRagState): Pro
                 finalAnswer: state.draftAnswer,
                 citations: citationsForAnswer(state.draftAnswer, evidence),
                 status: "Complete",
+                verificationStatus: "supported",
             }
         }
 
@@ -541,6 +586,7 @@ const createHallucinationCheckerNode = () => async (state: AgenticRagState): Pro
                 finalAnswer,
                 citations: [],
                 status: "Using best available answer...",
+                verificationStatus: "unsupported",
             }
         }
 
@@ -548,6 +594,7 @@ const createHallucinationCheckerNode = () => async (state: AgenticRagState): Pro
             subQuestions: [result.missingEvidenceQuery || state.question],
             iterationCount: state.iterationCount + 1,
             status: `Using best available answer... Gap: ${result.unsupportedClaims.slice(0, 2).join("; ")}`,
+            verificationStatus: "unsupported",
         }
     } catch (error) {
         logger.warn("[AGENTIC_RAG] Hallucination checker failed; accepting best available draft.", error)
@@ -555,6 +602,7 @@ const createHallucinationCheckerNode = () => async (state: AgenticRagState): Pro
             finalAnswer: state.draftAnswer,
             citations: citationsForAnswer(state.draftAnswer, evidence),
             status: "Using best available answer...",
+            verificationStatus: "checker_failed",
         }
     }
 }
@@ -617,6 +665,7 @@ export async function* streamAgenticRag(
     let lastState: Partial<AgenticRagState> = emptyState(question, conversationContext)
     let yieldedFinalAnswer = false
     let previousNodeCompletedAt = Date.now()
+    const nodeDurationsMs: Record<string, number> = {}
 
     try {
         const stream = await graph.stream(emptyState(question, conversationContext), {
@@ -631,6 +680,7 @@ export async function* streamAgenticRag(
                 if (!isPartialState(value)) continue
                 const now = Date.now()
                 const durationMs = now - previousNodeCompletedAt
+                nodeDurationsMs[node] = (nodeDurationsMs[node] || 0) + durationMs
                 logger.info(`[AGENTIC_RAG] ${node} completed in ${durationMs}ms`, {
                     node,
                     durationMs,
@@ -644,6 +694,9 @@ export async function* streamAgenticRag(
                     finalAnswer: value.finalAnswer,
                     citations: value.citations,
                     tokenUsage: value.finalAnswer ? tokenUsageCallback.usage : undefined,
+                    diagnostics: value.finalAnswer
+                        ? diagnosticsFromState(lastState, nodeDurationsMs)
+                        : undefined,
                 }
                 if (value.finalAnswer) yieldedFinalAnswer = true
             }
@@ -657,6 +710,7 @@ export async function* streamAgenticRag(
                 finalAnswer,
                 citations: lastState.citations,
                 tokenUsage: tokenUsageCallback.usage,
+                diagnostics: diagnosticsFromState(lastState, nodeDurationsMs),
             }
         }
     } catch (error) {
@@ -668,6 +722,7 @@ export async function* streamAgenticRag(
             finalAnswer,
             citations: lastState.citations,
             tokenUsage: tokenUsageCallback.usage,
+            diagnostics: diagnosticsFromState(lastState, nodeDurationsMs),
         }
     }
 }

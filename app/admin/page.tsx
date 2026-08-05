@@ -16,7 +16,8 @@ interface Metrics {
         outputTokens: number
         cost: number
         averageRelevance: number
-        faithfulness: number
+        faithfulness: number | null
+        verifiedRequests: number
         averageDurationMs: number
         errorRate: number
         cacheHitRate: number
@@ -60,7 +61,13 @@ export default function AdminPage() {
         ["Indexed chunks", metrics.chunks, Database],
         ["Messages", metrics.messages, MessageSquare],
         ["Cache hit rate", `${(metrics.last24Hours.cacheHitRate * 100).toFixed(1)}%`, Gauge],
-        ["Faithfulness", `${(metrics.last24Hours.faithfulness * 100).toFixed(1)}%`, ShieldCheck],
+        [
+            "Verified faithfulness",
+            metrics.last24Hours.faithfulness === null
+                ? "Not measured"
+                : `${(metrics.last24Hours.faithfulness * 100).toFixed(1)}%`,
+            ShieldCheck,
+        ],
         ["Estimated cost · 24h", `$${metrics.last24Hours.cost.toFixed(4)}`, DollarSign],
     ] as const
 
@@ -92,6 +99,7 @@ export default function AdminPage() {
                         <p className="mt-2">Error rate: {(metrics.last24Hours.errorRate * 100).toFixed(1)}%</p>
                         <p className="mt-2">Average latency: {Math.round(metrics.last24Hours.averageDurationMs)}ms</p>
                         <p className="mt-2">Tracked tokens: {(metrics.last24Hours.inputTokens + metrics.last24Hours.outputTokens).toLocaleString()}</p>
+                        <p className="mt-2">Faithfulness-verified answers: {metrics.last24Hours.verifiedRequests.toLocaleString()}</p>
                     </div>
                 </div>
             </div>

@@ -13,9 +13,15 @@ export interface IAiTrace extends Document {
     outputTokens: number
     estimatedCostUsd: number
     retrievedChunks: number
+    gradedChunks?: number
+    relevantChunks?: number
     citationCount: number
     averageRelevance?: number
     faithfulnessScore?: number
+    verificationStatus?: string
+    qualityMode?: string
+    phoenixTraceId?: string
+    nodeDurationsMs?: Record<string, number>
     errorCode?: string
     createdAt: Date
 }
@@ -33,9 +39,15 @@ const AiTraceSchema = new Schema<IAiTrace>({
     outputTokens: { type: Number, default: 0 },
     estimatedCostUsd: { type: Number, default: 0 },
     retrievedChunks: { type: Number, default: 0 },
+    gradedChunks: { type: Number },
+    relevantChunks: { type: Number },
     citationCount: { type: Number, default: 0 },
     averageRelevance: { type: Number },
     faithfulnessScore: { type: Number },
+    verificationStatus: { type: String },
+    qualityMode: { type: String },
+    phoenixTraceId: { type: String, index: true, sparse: true },
+    nodeDurationsMs: { type: Map, of: Number },
     errorCode: { type: String },
     createdAt: { type: Date, default: Date.now },
 })

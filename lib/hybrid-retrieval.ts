@@ -4,6 +4,7 @@ import { PineconeStore } from "@langchain/pinecone"
 import Chunk from "@/database/models/chunk.model"
 import dbConnect from "@/database/mongoose"
 import { logger } from "@/lib/logger"
+import { withPhoenixSpan } from "@/lib/phoenix-observability"
 import pineconeClient from "@/lib/pinecone"
 
 export type RetrievalChannel = "dense" | "lexical"
@@ -202,38 +203,46 @@ export const reciprocalRankFusion = (
 export const hybridSearch = async (
     query: string,
     scope: HybridSearchScope,
-): Promise<HybridSearchCandidate[]> => {
-    if (!query.trim() || scope.documentIds.length === 0) return []
+): Promise<HybridSearchCandidate[]> => withPhoenixSpan(
+    "rag.hybrid_retrieval",
+    "RETRIEVER",
+    {
+        "rag.query_length": query.length,
+        "rag.document_count": scope.documentIds.length,
+    },
+    async () => {
+        if (!query.trim() || scope.documentIds.length === 0) return []
 
-    const [denseResult, lexicalResult] = await Promise.allSettled([
-        denseSearch(query, scope),
-        lexicalSearch(query, scope),
-    ])
-    const dense = denseResult.status === "fulfilled" ? denseResult.value : []
-    const lexical = lexicalResult.status === "fulfilled" ? lexicalResult.value : []
+        const [denseResult, lexicalResult] = await Promise.allSettled([
+            denseSearch(query, scope),
+            lexicalSearch(query, scope),
+        ])
+        const dense = denseResult.status === "fulfilled" ? denseResult.value : []
+        const lexical = lexicalResult.status === "fulfilled" ? lexicalResult.value : []
 
-    if (denseResult.status === "rejected") {
-        logger.warn("[HYBRID_RETRIEVAL] Dense search failed; using lexical results.", denseResult.reason)
-    }
-    if (lexicalResult.status === "rejected") {
-        logger.warn("[HYBRID_RETRIEVAL] Lexical search failed; using dense results.", lexicalResult.reason)
-    }
-    if (dense.length === 0 && lexical.length === 0) {
-        if (denseResult.status === "rejected" && lexicalResult.status === "rejected") {
-            throw new AggregateError(
-                [denseResult.reason, lexicalResult.reason],
-                "Both hybrid retrieval channels failed.",
-            )
+        if (denseResult.status === "rejected") {
+            logger.warn("[HYBRID_RETRIEVAL] Dense search failed; using lexical results.", denseResult.reason)
         }
-        return []
-    }
+        if (lexicalResult.status === "rejected") {
+            logger.warn("[HYBRID_RETRIEVAL] Lexical search failed; using dense results.", lexicalResult.reason)
+        }
+        if (dense.length === 0 && lexical.length === 0) {
+            if (denseResult.status === "rejected" && lexicalResult.status === "rejected") {
+                throw new AggregateError(
+                    [denseResult.reason, lexicalResult.reason],
+                    "Both hybrid retrieval channels failed.",
+                )
+            }
+            return []
+        }
 
-    const fused = reciprocalRankFusion(dense, lexical)
-    logger.info("[HYBRID_RETRIEVAL] Search completed", {
-        denseCandidates: dense.length,
-        lexicalCandidates: lexical.length,
-        fusedCandidates: fused.length,
-        candidatesInBothChannels: fused.filter((candidate) => candidate.retrievalChannels.length === 2).length,
-    })
-    return fused
-}
+        const fused = reciprocalRankFusion(dense, lexical)
+        logger.info("[HYBRID_RETRIEVAL] Search completed", {
+            denseCandidates: dense.length,
+            lexicalCandidates: lexical.length,
+            fusedCandidates: fused.length,
+            candidatesInBothChannels: fused.filter((candidate) => candidate.retrievalChannels.length === 2).length,
+        })
+        return fused
+    },
+)

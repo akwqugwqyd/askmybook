@@ -4,7 +4,7 @@ AskMyBook is a Next.js app for uploading documents, data files, and images, then
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 22+
 - MongoDB
 - Clerk
 - Cloudinary
@@ -52,6 +52,12 @@ npm run lint
 npm run type-check
 npm run build
 ```
+
+## Evals and observability
+
+The production RAG path exports redacted OpenTelemetry/OpenInference spans to Arize Phoenix. A committed golden dataset is executed through real ingestion, hybrid retrieval, reranking, answer generation, and citations, then scored and regression-gated with Ragas.
+
+See [Evals and observability](docs/evals-observability.md) for setup, local testing, CI, privacy controls, thresholds, and production configuration.
 
 ## Deploy
 

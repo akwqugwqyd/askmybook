@@ -1,0 +1,30 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  static-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run type-check
+      - run: npm run build
+        env:
+          MONGODB_URI: mongodb://127.0.0.1:27017/build-validation
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_build_validation
+          CLERK_SECRET_KEY: sk_test_build_validation
+          CLOUDINARY_CLOUD_NAME: build-validation
+          CLOUDINARY_API_KEY: build-validation
+          CLOUDINARY_API_SECRET: build-validation
+          OPENAI_API_KEY: build-validation
+          PINECONE_API_KEY: build-validation
+          PINECONE_INDEX: build-validation
