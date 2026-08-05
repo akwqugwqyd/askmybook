@@ -21,7 +21,7 @@ const Navbar = () => {
             <div className="mx-auto flex h-full max-w-[1500px] items-center justify-between gap-4 px-4 sm:px-6">
                 <Link href="/" className="flex shrink-0 items-center gap-2 text-base font-bold tracking-tight text-[#effaff] sm:text-lg">
                     <span className="grid h-7 w-7 place-items-center rounded-lg bg-[#8ff5d3] text-[#07201c]"><Sparkles size={14} /></span>
-                    Ask<span className="text-[#8ff5d3]">MyBook</span>
+                    AskMyBook
                 </Link>
 
                 <nav className="flex min-w-0 items-center gap-2 sm:gap-5">

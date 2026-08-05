@@ -28,9 +28,15 @@ interface TraceInput {
     outputTokens: number
     estimatedCostUsd: number
     retrievedChunks: number
+    gradedChunks?: number
+    relevantChunks?: number
     citationCount: number
     averageRelevance?: number
     faithfulnessScore?: number
+    verificationStatus?: string
+    qualityMode?: string
+    phoenixTraceId?: string
+    nodeDurationsMs?: Record<string, number>
     errorCode?: string
 }
 

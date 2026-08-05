@@ -3,7 +3,7 @@ import mammoth from "mammoth"
 import { load } from "cheerio"
 import { parse } from "csv-parse/sync"
 import OpenAI from "openai"
-import { documentTypeFromFile, type DocumentType } from "@/lib/document-types"
+import { documentTypeFromFile } from "@/lib/document-types"
 import { extractScannedPdfWithOcr } from "@/lib/pdf-ocr"
 
 export interface ExtractedPage {
@@ -149,5 +149,3 @@ export const extractDocument = async (
     }
     return extractImage(buffer, filename, contentType || "image/png")
 }
-
-export const getDocumentType = (filename: string): DocumentType | undefined => documentTypeFromFile(filename)

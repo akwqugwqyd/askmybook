@@ -30,7 +30,8 @@ export async function GET() {
             outputTokens: number
             cost: number
             averageRelevance: number
-            faithfulness: number
+            faithfulness: number | null
+            verifiedRequests: number
             averageDurationMs: number
         }>([
             { $match: { createdAt: { $gte: since } } },
@@ -45,6 +46,15 @@ export async function GET() {
                     cost: { $sum: "$estimatedCostUsd" },
                     averageRelevance: { $avg: "$averageRelevance" },
                     faithfulness: { $avg: "$faithfulnessScore" },
+                    verifiedRequests: {
+                        $sum: {
+                            $cond: [
+                                { $ne: [{ $type: "$faithfulnessScore" }, "missing"] },
+                                1,
+                                0,
+                            ],
+                        },
+                    },
                     averageDurationMs: { $avg: "$durationMs" },
                 },
             },
@@ -59,7 +69,8 @@ export async function GET() {
         outputTokens: 0,
         cost: 0,
         averageRelevance: 0,
-        faithfulness: 0,
+        faithfulness: null,
+        verifiedRequests: 0,
         averageDurationMs: 0,
     }
     return NextResponse.json({

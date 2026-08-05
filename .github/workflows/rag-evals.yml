@@ -1,0 +1,56 @@
+name: RAG evaluation
+
+on:
+  workflow_dispatch:
+
+jobs:
+  end-to-end-rag-evaluation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements-eval.txt
+      - run: npm ci
+      - run: python -m venv .venv-evals
+      - run: npm run eval:setup
+      - name: Start local Phoenix
+        run: |
+          npm run observability:phoenix -- --verbose > phoenix.log 2>&1 &
+          for attempt in {1..30}; do
+            curl --fail --silent http://127.0.0.1:6006/healthz && exit 0
+            sleep 2
+          done
+          cat phoenix.log
+          exit 1
+        env:
+          PHOENIX_HOST: http://127.0.0.1:6006
+      - run: npm run eval:rag
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+          CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
+          CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+          PINECONE_INDEX: ${{ secrets.PINECONE_INDEX }}
+          PHOENIX_COLLECTOR_ENDPOINT: http://127.0.0.1:6006
+          PHOENIX_HOST: http://127.0.0.1:6006
+          PHOENIX_PROJECT_NAME: ai-book-saas-ci
+          PHOENIX_CAPTURE_CONTENT: "false"
+          PHOENIX_EVAL_ANNOTATIONS_REQUIRED: "true"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rag-evaluation-results
+          path: |
+            scripts/evals/results/*.json
+            phoenix.log
+          if-no-files-found: warn
